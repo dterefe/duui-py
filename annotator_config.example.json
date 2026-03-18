@@ -1,0 +1,40 @@
+{
+    "meta": {
+        "implementation_lang": "Python",
+        "meta": {},
+        "settings": {
+            "validation": {
+                "strict_mime_validation": true,
+                "strict_input_mime_check": true,
+                "strict_output_mime_check": true,
+                "strict_sofa_data_type_validation": true,
+                "strict_descriptor_mime_pattern_validation": true
+            },
+            "limits": {
+                "request_max_bytes": null,
+                "response_max_bytes": null
+            },
+            "errors": {
+                "fail_on_codec_error": true,
+                "include_validation_details": true
+            }
+        }
+    },
+    "descriptor": {
+        "name": "my-annotator",
+        "version": "0.0.0",
+        "input": {
+            "domain": {
+                "sofa": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" },
+                "optional_types": []
+            },
+            "optional_inputs": []
+        },
+        "output": {
+            "sofa": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" },
+            "types": []
+        }
+    },
+    "typesystem_xml_path": "TypeSystem.xml",
+    "parameters_schema": {}
+}
