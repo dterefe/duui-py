@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from .core import (
     Event,
+    EventType,
+    LogLevel,
     LogEvent,
     MetricEvent,
     ErrorEvent,
@@ -36,6 +38,8 @@ from .errors import log_errors, error_context, log_exception, log_error_message
 __all__ = [
     # Core events and logger
     "Event",
+    "EventType",
+    "LogLevel",
     "LogEvent",
     "MetricEvent",
     "ErrorEvent",
