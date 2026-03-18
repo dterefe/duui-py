@@ -1,0 +1,79 @@
+{
+  "meta": {
+    "implementation_lang": "Python",
+    "meta": {
+      "spacy_version": "3.7.0"
+    },
+    "settings": {
+      "validation": {
+        "strict_mime_validation": true,
+        "strict_input_mime_check": true,
+        "strict_output_mime_check": true,
+        "strict_sofa_data_type_validation": true,
+        "strict_descriptor_mime_pattern_validation": true
+      },
+      "limits": {
+        "request_max_bytes": null,
+        "response_max_bytes": null
+      },
+      "errors": {
+        "fail_on_codec_error": true,
+        "include_validation_details": true
+      },
+      "logging": {
+        "enabled": true,
+        "stream_timeout_minutes": 5,
+        "max_queue_size": 1000,
+        "metrics_collection_interval_seconds": 5
+      }
+    }
+  },
+  "descriptor": {
+    "name": "spacy-lua-msgpack",
+    "version": "1.0.0",
+    "input": {
+      "domain": {
+        "sofa": {
+          "mimeType": "text/plain; charset=utf-8",
+          "language": "x-unspecified"
+        },
+        "optional_types": []
+      },
+      "optional_inputs": []
+    },
+    "output": {
+      "sofa": {
+        "mimeType": "text/plain; charset=utf-8",
+        "language": "x-unspecified"
+      },
+      "types": [
+        "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence",
+        "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token",
+        "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma",
+        "de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS",
+        "de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.morph.MorphologicalFeatures",
+        "de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.Dependency",
+        "de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity"
+      ]
+    }
+  },
+  "typesystem_xml_path": "TypeSystemSpacy.xml",
+  "parameters_schema": {
+    "model_name": {
+      "type": "string",
+      "description": "Name of the spaCy model to use",
+      "default": "en_core_web_sm",
+      "enum": ["en_core_web_sm", "de_core_news_sm", "fr_core_news_sm", "xx_ent_wiki_sm"]
+    },
+    "use_existing_tokens": {
+      "type": "boolean",
+      "description": "Use existing tokens from CAS",
+      "default": false
+    },
+    "use_existing_sentences": {
+      "type": "boolean",
+      "description": "Use existing sentences from CAS",
+      "default": false
+    }
+  }
+}
