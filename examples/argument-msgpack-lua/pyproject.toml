@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "argument-msgpack-lua"
+version = "1.0.0"
+description = "Argument Classification migrated to duui-py framework"
+requires-python = ">=3.10"
+dependencies = [
+  "duui-py",
+  "uvicorn[standard]>=0.27.0",
+]
+
+[tool.setuptools]
+py-modules = ["argument_annotator"]

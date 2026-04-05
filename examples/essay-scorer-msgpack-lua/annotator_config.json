@@ -1,0 +1,42 @@
+{
+  "meta": {
+    "implementation_lang": "Python",
+    "meta": {"example": "duui-llm-essay-scorer migration"},
+    "settings": {
+      "validation": {
+        "strict_mime_validation": true,
+        "strict_input_mime_check": true,
+        "strict_output_mime_check": true,
+        "strict_sofa_data_type_validation": true,
+        "strict_descriptor_mime_pattern_validation": true
+      },
+      "limits": {"request_max_bytes": null, "response_max_bytes": null},
+      "errors": {"fail_on_codec_error": true, "include_validation_details": true},
+      "logging": {
+        "enabled": true,
+        "stream_timeout_minutes": 5,
+        "max_queue_size": 1000,
+        "metrics_collection_interval_seconds": 5
+      }
+    }
+  },
+  "descriptor": {
+    "name": "essay-scorer-msgpack-lua",
+    "version": "1.0.0",
+    "input": {
+      "sofa": {
+        "text": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"},
+        "annotation": ["de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Div"]
+      },
+      "types": ["de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Div"]
+    },
+    "output": {
+      "sofa": {"text": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"}},
+      "types": ["org.texttechnologylab.annotation.EssayScore"]
+    }
+  },
+  "typesystem_xml_path": "TypeSystemEssayScorer.xml",
+  "parameters_schema": {
+    "name_model": {"type": "string", "default": "heuristic-essay-scorer", "description": "Model label added to metadata."}
+  }
+}
