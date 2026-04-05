@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import inspect
+from collections.abc import AsyncIterable, AsyncIterator
+
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from typing import Any, TypeVar
 
 from duui_py.annotator import DuuiAnnotator
-from duui_py.codecs.base import Codec
+from duui_py.codecs.base import Codec, StreamingRequestDecoder, StreamingResponseEncoder
 from duui_py.logging import (
     configure_logger,
     configure_stream_manager,
@@ -37,6 +40,16 @@ def _validate_lua_communication_layer(codec: Codec[Any, Any]) -> None:
             "Invalid codec communication layer: only Lua script communication layers are supported "
             "(expected {'format': 'lua', 'spec': '<non-empty string>'})."
         )
+
+
+def _is_async_iterable(value: object) -> bool:
+    return hasattr(value, "__aiter__")
+
+
+async def _maybe_await(value: object) -> object:
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 
 def create_app(
@@ -92,6 +105,99 @@ def create_app(
 
     @app.post("/v1/process")
     async def post_process(request: Request) -> Response:
+        supports_streaming = (
+            isinstance(codec, StreamingRequestDecoder)
+            and isinstance(codec, StreamingResponseEncoder)
+            and callable(getattr(annotator, "process_stream", None))
+        )
+
+        if supports_streaming:
+            async def limited_body_stream() -> AsyncIterator[bytes]:
+                total = 0
+                async for chunk in request.stream():
+                    if chunk == b"":
+                        break
+                    total += len(chunk)
+                    if limits.request_max_bytes is not None and total > limits.request_max_bytes:
+                        raise HTTPException(status_code=413, detail="request payload too large")
+                    yield chunk
+
+            try:
+                decoded_input = await codec.decode_request_stream(limited_body_stream())
+            except Exception as exc:  # noqa: BLE001
+                detail = f"request decode failed: {exc}" if errors.include_validation_details else "request decode failed"
+                if errors.fail_on_codec_error:
+                    raise HTTPException(status_code=400, detail=detail) from exc
+                raise HTTPException(status_code=422, detail=detail) from exc
+
+            def validate_input_doc(doc: RequestT) -> RequestT:
+                if isinstance(doc, DuuiDocument):
+                    expected = cfg.descriptor.input.default_mime_type()
+                    if (
+                        validation.strict_mime_validation
+                        and validation.strict_input_mime_check
+                        and not matches_mime_type(expected, doc.sofa.mimeType)
+                    ):
+                        raise HTTPException(
+                            status_code=415,
+                            detail=(
+                                f"unsupported sofa.mimeType: {doc.sofa.mimeType} (expected {expected})"
+                                if errors.include_validation_details
+                                else "unsupported sofa.mimeType"
+                            ),
+                        )
+                return doc
+
+            if _is_async_iterable(decoded_input):
+                async def validated_input_stream() -> AsyncIterator[RequestT]:
+                    async for doc in decoded_input:  # type: ignore[assignment]
+                        yield validate_input_doc(doc)
+                handoff_input: RequestT | AsyncIterable[RequestT] = validated_input_stream()
+            else:
+                handoff_input = validate_input_doc(decoded_input)  # type: ignore[arg-type]
+
+            process_stream_call = getattr(annotator, "process_stream")
+            processed_output = await _maybe_await(process_stream_call(handoff_input))
+            if not _is_async_iterable(processed_output):
+                raise HTTPException(status_code=500, detail="streaming annotator must return an async iterable")
+
+            async def validated_result_stream() -> AsyncIterator[ResponseT]:
+                expected = cfg.descriptor.output.default_mime_type()
+                async for result in processed_output:  # type: ignore[assignment]
+                    if isinstance(result, DuuiResult) and result.sofa is not None:
+                        if (
+                            validation.strict_mime_validation
+                            and validation.strict_output_mime_check
+                            and not matches_mime_type(expected, result.sofa.mimeType)
+                        ):
+                            raise HTTPException(
+                                status_code=500,
+                                detail=(
+                                    f"annotator returned unsupported output sofa.mimeType: {result.sofa.mimeType} (expected {expected})"
+                                    if errors.include_validation_details
+                                    else "annotator returned unsupported output sofa.mimeType"
+                                ),
+                            )
+                    yield result
+
+            try:
+                encoded_stream = await codec.encode_response_stream(validated_result_stream())
+            except Exception as exc:  # noqa: BLE001
+                detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
+                if errors.fail_on_codec_error:
+                    raise HTTPException(status_code=500, detail=detail) from exc
+                raise HTTPException(status_code=422, detail=detail) from exc
+
+            async def limited_response_stream() -> AsyncIterator[bytes]:
+                total = 0
+                async for chunk in encoded_stream:
+                    total += len(chunk)
+                    if limits.response_max_bytes is not None and total > limits.response_max_bytes:
+                        raise HTTPException(status_code=500, detail="response payload too large")
+                    yield chunk
+
+            return StreamingResponse(limited_response_stream(), media_type=codec.response_media_type)
+
         body = await request.body()
         if limits.request_max_bytes is not None and len(body) > limits.request_max_bytes:
             raise HTTPException(status_code=413, detail="request payload too large")
