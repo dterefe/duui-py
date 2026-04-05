@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -84,40 +84,90 @@ class SofaSpec(BaseModel):
     language: str = Field(min_length=1)
 
 
-class DomainSpec(BaseModel):
+class SofaModeSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    mimeType: str | None = None
+    language: str | None = None
+    targetView: str | None = None
+
+
+class InputSofaSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    sofa: SofaSpec
-    optional_types: list[str] = Field(default_factory=list)
+    text: SofaModeSpec | None = None
+    uri: SofaModeSpec | None = None
+    bytes: SofaModeSpec | None = None
+    annotation: list[str] = Field(default_factory=list)
+    selections: list[str] = Field(default_factory=list)
+
+    def annotation_types(self) -> list[str]:
+        merged = list(self.annotation) + list(self.selections)
+        dedup: list[str] = []
+        seen: set[str] = set()
+        for entry in merged:
+            if entry not in seen:
+                seen.add(entry)
+                dedup.append(entry)
+        return dedup
+
+    def default_mime_type(self) -> str:
+        for mode in (self.text, self.bytes, self.uri):
+            if mode is not None and mode.mimeType:
+                return mode.mimeType
+        return "text/plain; charset=utf-8"
+
+    def default_language(self) -> str:
+        for mode in (self.text, self.bytes, self.uri):
+            if mode is not None and mode.language:
+                return mode.language
+        return "x-unspecified"
 
 
-class ExcludeSpec(BaseModel):
+class OutputSofaSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    features: list[str] = Field(default_factory=list)
-    ranges: list[str] = Field(default_factory=list)
-    types: list[str] = Field(default_factory=list)
+    text: SofaModeSpec | None = None
+    uri: SofaModeSpec | None = None
+    bytes: SofaModeSpec | None = None
 
+    def default_mime_type(self) -> str:
+        for mode in (self.text, self.bytes, self.uri):
+            if mode is not None and mode.mimeType:
+                return mode.mimeType
+        return "text/plain; charset=utf-8"
 
-class InputTypeSpec(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    type: str = Field(min_length=1)
-    exclude: ExcludeSpec = Field(default_factory=ExcludeSpec)
+    def default_language(self) -> str:
+        for mode in (self.text, self.bytes, self.uri):
+            if mode is not None and mode.language:
+                return mode.language
+        return "x-unspecified"
 
 
 class InputDesc(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    domain: DomainSpec
-    optional_inputs: list[InputTypeSpec] = Field(default_factory=list)
+    sofa: InputSofaSpec = Field(default_factory=InputSofaSpec)
+    types: list[str] = Field(default_factory=list)
+
+    def default_mime_type(self) -> str:
+        return self.sofa.default_mime_type()
+
+    def default_language(self) -> str:
+        return self.sofa.default_language()
 
 
 class OutputDesc(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    sofa: SofaSpec
+    sofa: OutputSofaSpec = Field(default_factory=OutputSofaSpec)
     types: list[str] = Field(default_factory=list)
+
+    def default_mime_type(self) -> str:
+        return self.sofa.default_mime_type()
+
+    def default_language(self) -> str:
+        return self.sofa.default_language()
 
 
 class AnnotatorDescriptor(BaseModel):
@@ -127,6 +177,63 @@ class AnnotatorDescriptor(BaseModel):
     version: str = Field(min_length=1)
     input: InputDesc
     output: OutputDesc
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_descriptor_shape(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        normalized = dict(data)
+
+        input_part = normalized.get("input")
+        if isinstance(input_part, dict) and "domain" in input_part:
+            domain = input_part.get("domain", {})
+            domain_sofa = domain.get("sofa", {}) if isinstance(domain, dict) else {}
+            optional_types = list(domain.get("optional_types", [])) if isinstance(domain, dict) else []
+            optional_inputs = input_part.get("optional_inputs", [])
+            optional_input_types = [
+                item.get("type")
+                for item in optional_inputs
+                if isinstance(item, dict) and isinstance(item.get("type"), str)
+            ]
+            merged_types = [*optional_types, *optional_input_types]
+            dedup_types: list[str] = []
+            seen: set[str] = set()
+            for item in merged_types:
+                if item not in seen:
+                    seen.add(item)
+                    dedup_types.append(item)
+
+            normalized["input"] = {
+                "sofa": {
+                    "text": {
+                        "mimeType": domain_sofa.get("mimeType", "text/plain; charset=utf-8"),
+                        "language": domain_sofa.get("language", "x-unspecified"),
+                    },
+                    "annotation": dedup_types,
+                },
+                "types": dedup_types,
+            }
+
+        output_part = normalized.get("output")
+        if isinstance(output_part, dict):
+            sofa_part = output_part.get("sofa")
+            if isinstance(sofa_part, dict) and (
+                "mimeType" in sofa_part or "language" in sofa_part or "targetView" in sofa_part
+            ):
+                normalized["output"] = {
+                    "sofa": {
+                        "text": {
+                            "mimeType": sofa_part.get("mimeType"),
+                            "language": sofa_part.get("language"),
+                            "targetView": sofa_part.get("targetView"),
+                        }
+                    },
+                    "types": list(output_part.get("types", [])),
+                }
+
+        return normalized
 
 
 class AnnotatorConfig(BaseModel):
@@ -139,11 +246,15 @@ class AnnotatorConfig(BaseModel):
     parameters_schema: Json = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_descriptor_patterns(self) -> "AnnotatorConfig":
+    def validate_descriptor_patterns(self) -> Self:
         validation = self.meta.settings.validation
         if validation.strict_mime_validation and validation.strict_descriptor_mime_pattern_validation:
-            _validate_mime_pattern(self.descriptor.input.domain.sofa.mimeType)
-            _validate_mime_pattern(self.descriptor.output.sofa.mimeType)
+            input_mime = self.descriptor.input.default_mime_type()
+            output_mime = self.descriptor.output.default_mime_type()
+            if input_mime:
+                _validate_mime_pattern(input_mime)
+            if output_mime:
+                _validate_mime_pattern(output_mime)
         return self
 
 

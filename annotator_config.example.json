@@ -24,14 +24,22 @@
         "name": "my-annotator",
         "version": "0.0.0",
         "input": {
-            "domain": {
-                "sofa": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" },
-                "optional_types": []
+            "sofa": {
+                "text": {
+                    "mimeType": "text/plain; charset=utf-8",
+                    "language": "x-unspecified"
+                },
+                "annotation": []
             },
-            "optional_inputs": []
+            "types": []
         },
         "output": {
-            "sofa": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" },
+            "sofa": {
+                "text": {
+                    "mimeType": "text/plain; charset=utf-8",
+                    "language": "x-unspecified"
+                }
+            },
             "types": []
         }
     },

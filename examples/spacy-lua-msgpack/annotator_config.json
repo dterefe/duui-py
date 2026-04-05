@@ -32,19 +32,21 @@
     "name": "spacy-lua-msgpack",
     "version": "1.0.0",
     "input": {
-      "domain": {
-        "sofa": {
+      "sofa": {
+        "text": {
           "mimeType": "text/plain; charset=utf-8",
           "language": "x-unspecified"
         },
-        "optional_types": []
+        "annotation": []
       },
-      "optional_inputs": []
+      "types": []
     },
     "output": {
       "sofa": {
-        "mimeType": "text/plain; charset=utf-8",
-        "language": "x-unspecified"
+        "text": {
+          "mimeType": "text/plain; charset=utf-8",
+          "language": "x-unspecified"
+        }
       },
       "types": [
         "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence",

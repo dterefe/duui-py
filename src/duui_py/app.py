@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from typing import Any, TypeVar
@@ -29,6 +28,17 @@ RequestT = TypeVar("RequestT")
 ResponseT = TypeVar("ResponseT")
 
 
+def _validate_lua_communication_layer(codec: Codec[Any, Any]) -> None:
+    content = codec.communication_layer_content()
+    format_value = str(content.get("format", "")).lower()
+    spec_value = content.get("spec")
+    if format_value != "lua" or not isinstance(spec_value, str) or not spec_value.strip():
+        raise RuntimeError(
+            "Invalid codec communication layer: only Lua script communication layers are supported "
+            "(expected {'format': 'lua', 'spec': '<non-empty string>'})."
+        )
+
+
 def create_app(
     annotator_cls: type[DuuiAnnotator[RequestT, ResponseT]],
     *,
@@ -44,6 +54,7 @@ def create_app(
     errors = settings.errors
     logging_settings = settings.logging
     codec: Codec[RequestT, ResponseT] = annotator.codec()
+    _validate_lua_communication_layer(codec)
 
     app = FastAPI(title=cfg.descriptor.name, version=cfg.descriptor.version)
     typesystem_xml = open(cfg.typesystem_xml_path, "rb").read()
@@ -63,27 +74,8 @@ def create_app(
         return {
             "name": d.name,
             "version": d.version,
-            "input": {
-                "domain": {
-                    "sofa": {"mimeType": d.input.domain.sofa.mimeType, "language": d.input.domain.sofa.language},
-                    "optional_types": list(d.input.domain.optional_types),
-                },
-                "optional_inputs": [
-                    {
-                        "type": it.type,
-                        "exclude": {
-                            "features": list(it.exclude.features),
-                            "ranges": list(it.exclude.ranges),
-                            "types": list(it.exclude.types),
-                        },
-                    }
-                    for it in d.input.optional_inputs
-                ],
-            },
-            "output": {
-                "sofa": {"mimeType": d.output.sofa.mimeType, "language": d.output.sofa.language},
-                "types": list(d.output.types),
-            },
+            "input": d.input.model_dump(),
+            "output": d.output.model_dump(),
         }
 
     @app.get("/v1/documentation")
@@ -113,7 +105,7 @@ def create_app(
             raise HTTPException(status_code=422, detail=detail) from exc
 
         if isinstance(doc, DuuiDocument):
-            expected = cfg.descriptor.input.domain.sofa.mimeType
+            expected = cfg.descriptor.input.default_mime_type()
             if validation.strict_mime_validation and validation.strict_input_mime_check and not matches_mime_type(expected, doc.sofa.mimeType):
                 raise HTTPException(
                     status_code=415,
@@ -127,7 +119,7 @@ def create_app(
         result: ResponseT = await annotator.process(doc)
 
         if isinstance(result, DuuiResult) and result.sofa is not None:
-            expected = cfg.descriptor.output.sofa.mimeType
+            expected = cfg.descriptor.output.default_mime_type()
             if validation.strict_mime_validation and validation.strict_output_mime_check and not matches_mime_type(expected, result.sofa.mimeType):
                 raise HTTPException(
                     status_code=500,

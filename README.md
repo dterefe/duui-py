@@ -81,14 +81,16 @@ Start from `annotator_config.example.json`:
     "name": "my-annotator",
     "version": "0.0.0",
     "input": {
-      "domain": {
-        "sofa": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" },
-        "optional_types": []
+      "sofa": {
+        "text": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" },
+        "annotation": []
       },
-      "optional_inputs": []
+      "types": []
     },
     "output": {
-      "sofa": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" },
+      "sofa": {
+        "text": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" }
+      },
       "types": []
     }
   },
@@ -103,7 +105,7 @@ Start from `annotator_config.example.json`:
 from __future__ import annotations
 
 from duui_py.annotator import DuuiAnnotator
-from duui_py.codecs.msgpack_v1 import DuuiBinV1MsgpackCodec
+from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
 from duui_py.models import DuuiDocument, DuuiResult
 from duui_py.logging import (
     configure_logger, 
@@ -137,8 +139,8 @@ class MyAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
         
         self.logger = get_event_logger()
     
-    def codec(self) -> DuuiBinV1MsgpackCodec:
-        return DuuiBinV1MsgpackCodec()
+    def codec(self) -> MsgPackLuaCodec:
+        return MsgPackLuaCodec(self.config)
     
     @log_errors(log_level="ERROR", recovery_suggestion="Check input format")
     async def process(self, doc: DuuiDocument) -> DuuiResult:
@@ -300,7 +302,7 @@ def process_with_context(doc):
 - `GET /v1/typesystem` → serves the TypeSystem XML
 - `GET /v1/details/input_output` → emits the descriptor in DUUI format
 - `GET /v1/documentation` → emits metadata + `parameters_schema`
-- `GET /v1/communication_layer` → codec information
+- `GET /v1/communication_layer` → Lua communication script specification
 - `POST /v1/process` → the processing endpoint
 
 ### Logging and monitoring endpoints
@@ -358,7 +360,7 @@ duui-py/
 │   ├── version.py            # Package version
 │   ├── codecs/               # Communication layer codecs
 │   │   ├── base.py
-│   │   ├── msgpack_v1/       # DUUI-BIN v1 MessagePack codec
+│   │   ├── msgpack_lua/      # Descriptor-driven Lua + framed msgpack codec
 │   │   └── lua_custom/       # Lua custom codec
 │   ├── logging/              # Logging and monitoring module
 │   │   ├── core.py           # Event models and logger
