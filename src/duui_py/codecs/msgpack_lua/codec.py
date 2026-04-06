@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import json
 import struct
-import xml.etree.ElementTree as ET
-from pathlib import Path
 from typing import Any, cast
 
 import msgpack
 
 from duui_py.codecs.base import Codec
-from duui_py.models import AnnotatorConfig, AnnotatorDescriptor, DuuiDocument, DuuiResult, FsRec, SofaPayload
+from duui_py.models import AnnotatorConfig, AnnotatorDescriptor, DuuiDocument, DuuiResult, FsRec, SoFa
 from duui_py.models.fs_builder import build_feature_structures
+from duui_py.models.uima import normalize_uima_value
 
 CHUNK_START = 0x01
 CHUNK_SOFA = 0x02
@@ -30,7 +29,6 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
     def __init__(self, config: AnnotatorConfig):
         self.config = config
         self.descriptor = config.descriptor
-        self.typesystem_info = self._parse_typesystem_xml()
 
     def communication_layer_content(self) -> dict[str, str | int]:
         return {
@@ -46,14 +44,22 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
             raise ValueError("empty chunk stream")
         if chunks[0][0] != CHUNK_START:
             raise ValueError("first chunk must be START")
+        parameters: dict[str, Any] = {}
+        view = ""
         if chunks[0][1]:
-            raise ValueError("START chunk must not contain payload")
+            start_payload = self._decode_msgpack_map(chunks[0][1])
+            raw_parameters = start_payload.get("parameters", {})
+            if isinstance(raw_parameters, dict):
+                parameters = {str(k): normalize_uima_value(v) for k, v in raw_parameters.items()}
+            raw_view = start_payload.get("view", "")
+            if isinstance(raw_view, str):
+                view = raw_view
         if chunks[-1][0] != CHUNK_END:
             raise ValueError("chunk stream must end with END")
         if chunks[-1][1]:
             raise ValueError("END chunk must not contain payload")
 
-        sofa_payload: SofaPayload | None = None
+        sofa_payload: SoFa | None = None
         fs_items: list[FsRec] = []
 
         for index, (chunk_type, payload) in enumerate(chunks):
@@ -69,14 +75,22 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
                 raise ValueError(self._decode_error_payload(payload))
             if chunk_type == CHUNK_SOFA:
                 unpacked = self._decode_msgpack_map(payload)
-                sofa_payload = SofaPayload(
-                    mimeType=str(unpacked.get("mimeType", self.descriptor.input.default_mime_type())),
-                    language=str(unpacked.get("language", self.descriptor.input.default_language())),
-                    data=cast(str | bytes, unpacked.get("data", "")),
-                )
+                if "features" in unpacked:
+                    sofa_payload = SoFa.model_validate(unpacked)
+                else:
+                    sofa_payload = SoFa(
+                        mimeType=str(unpacked.get("mimeType", self.descriptor.input.default_mime_type())),
+                        language=str(unpacked.get("language", self.descriptor.input.default_language())),
+                        data=cast(str | bytes, unpacked.get("data", "")),
+                    )
                 continue
             if chunk_type in (CHUNK_ANNOTATION, CHUNK_FEATURE_STRUCTURE):
                 unpacked = self._decode_msgpack_map(payload)
+                raw_features = cast(dict[str, Any], unpacked.get("features", {}))
+                features = {str(k): normalize_uima_value(v) for k, v in raw_features.items()}
+                covered_text = unpacked.get("coveredText")
+                if isinstance(covered_text, str):
+                    features["coveredText"] = covered_text
                 fs_items.append(
                     FsRec(
                         id=int(unpacked.get("id", 0)),
@@ -84,20 +98,25 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
                         type=str(unpacked.get("type", "")),
                         begin=cast(int | None, unpacked.get("begin")),
                         end=cast(int | None, unpacked.get("end")),
-                        features=cast(dict[str, Any], unpacked.get("features", {})),
+                        features=features,
+                        updated_features=[
+                            str(v)
+                            for v in cast(list[Any], unpacked.get("updated_features", []))
+                            if isinstance(v, str)
+                        ],
                     )
                 )
                 continue
             raise ValueError(f"unknown chunk type: 0x{chunk_type:02X}")
 
         if sofa_payload is None:
-            sofa_payload = SofaPayload(
+            sofa_payload = SoFa(
                 mimeType=self.descriptor.input.default_mime_type(),
                 language=self.descriptor.input.default_language(),
                 data="",
             )
 
-        return DuuiDocument(parameters={}, view="", sofa=sofa_payload, fs=fs_items)
+        return DuuiDocument(parameters=parameters, view=view, sofa=sofa_payload, fs=fs_items)
 
     def encode_response(self, result: DuuiResult) -> bytes:
         chunks: list[tuple[int, bytes]] = [(CHUNK_START, b"")]
@@ -106,14 +125,7 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
             chunks.append(
                 (
                     CHUNK_SOFA,
-                    msgpack.packb(
-                        {
-                            "mimeType": result.sofa.mimeType,
-                            "language": result.sofa.language,
-                            "data": result.sofa.data,
-                        },
-                        use_bin_type=True,
-                    ),
+                    msgpack.packb(result.sofa.model_dump(by_alias=True), use_bin_type=True),
                 )
             )
 
@@ -132,7 +144,7 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
                                 "type": annotation.type,
                                 "begin": annotation.begin,
                                 "end": annotation.end,
-                                "features": annotation.features,
+                                "features": {k: normalize_uima_value(v) for k, v in annotation.feature_map().items()},
                             },
                             use_bin_type=True,
                         ),
@@ -204,73 +216,17 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
             out.extend(payload)
         return bytes(out)
 
-    def _parse_typesystem_xml(self) -> dict[str, Any]:
-        path = Path(self.config.typesystem_xml_path)
-        if not path.exists():
-            return {}
-
-        try:
-            tree = ET.parse(path)
-            root = tree.getroot()
-        except Exception:
-            return {}
-
-        def local_name(tag: str) -> str:
-            if "}" in tag:
-                return tag.rsplit("}", 1)[1]
-            return tag
-
-        collected_types: list[dict[str, Any]] = []
-        for elem in root.iter():
-            if local_name(elem.tag) != "typeDescription":
-                continue
-
-            name: str | None = None
-            supertype: str | None = None
-            features: list[dict[str, str | None]] = []
-
-            for child in elem:
-                child_name = local_name(child.tag)
-                if child_name == "name":
-                    name = (child.text or "").strip() or None
-                elif child_name == "supertypeName":
-                    supertype = (child.text or "").strip() or None
-                elif child_name == "features":
-                    for feature in child:
-                        if local_name(feature.tag) != "featureDescription":
-                            continue
-                        feature_name: str | None = None
-                        feature_range: str | None = None
-                        for fchild in feature:
-                            fchild_name = local_name(fchild.tag)
-                            if fchild_name == "name":
-                                feature_name = (fchild.text or "").strip() or None
-                            elif fchild_name == "rangeTypeName":
-                                feature_range = (fchild.text or "").strip() or None
-                        features.append({"name": feature_name, "range": feature_range})
-
-            collected_types.append(
-                {
-                    "name": name,
-                    "supertype": supertype,
-                    "features": features,
-                }
-            )
-
-        return {"types": collected_types}
-
     def _generate_lua_script(self) -> str:
         descriptor_json = json.dumps(self.descriptor.model_dump(), ensure_ascii=False)
-        typesystem_json = json.dumps(self.typesystem_info, ensure_ascii=False)
 
         return f'''-- MsgPack Lua communication script for {self.descriptor.name}
 -- Auto-generated from annotator descriptor
 -- Framing: 1-byte type + 4-byte big-endian length + payload
 
 MessagePack = luajava.bindClass("org.msgpack.core.MessagePack")
+JCasUtil = luajava.bindClass("org.apache.uima.fit.util.JCasUtil")
 
 local descriptor = json.decode([=[{descriptor_json}]=])
-local typesystem_info = json.decode([=[{typesystem_json}]=])
 
 local CHUNK_START = 0x01
 local CHUNK_SOFA = 0x02
@@ -343,9 +299,51 @@ local function pack_error_payload(message)
     return out
 end
 
+local function pack_start_payload(parameters, sourceView)
+    local p = MessagePack:newDefaultBufferPacker()
+    p:packMapHeader(2)
+    p:packString("parameters")
+    if type(parameters) == "table" then
+        local count = 0
+        for k, _ in pairs(parameters) do
+            if type(k) == "string" then
+                count = count + 1
+            end
+        end
+        p:packMapHeader(count)
+        for k, v in pairs(parameters) do
+            if type(k) == "string" then
+                p:packString(k)
+                if type(v) == "string" then
+                    p:packString(v)
+                elseif type(v) == "number" then
+                    p:packDouble(v)
+                elseif type(v) == "boolean" then
+                    p:packBoolean(v)
+                elseif v == nil then
+                    p:packNil()
+                else
+                    p:packString(tostring(v))
+                end
+            end
+        end
+    else
+        p:packMapHeader(0)
+    end
+    p:packString("view")
+    if type(sourceView) == "string" then
+        p:packString(sourceView)
+    else
+        p:packString("")
+    end
+    local out = p:toByteArray()
+    p:close()
+    return out
+end
+
 function serialize(inputCas, outputStream, parameters, sourceView)
     local ok, err = pcall(function()
-        write_chunk(outputStream, CHUNK_START, "")
+        write_chunk(outputStream, CHUNK_START, pack_start_payload(parameters, sourceView))
 
         local mime = "text/plain; charset=utf-8"
         if descriptor and descriptor.input and descriptor.input.sofa then
@@ -369,21 +367,62 @@ function serialize(inputCas, outputStream, parameters, sourceView)
                 lang = ds.uri.language
             end
         end
-        local text = inputCas:getSofaDataString() or ""
+        local annotation_selection = nil
+        if descriptor and descriptor.input and descriptor.input.sofa and descriptor.input.sofa.annotation then
+            annotation_selection = descriptor.input.sofa.annotation
+        end
 
-        local p = MessagePack:newDefaultBufferPacker()
-        p:packMapHeader(3)
-        p:packString("mimeType")
-        p:packString(mime)
-        p:packString("language")
-        p:packString(lang)
-        p:packString("data")
-        p:packString(text)
+        if annotation_selection and #annotation_selection > 0 then
+            for i = 1, #annotation_selection do
+                local type_name = annotation_selection[i]
+                local ok_bind, ann_cls = pcall(function()
+                    return luajava.bindClass(type_name)
+                end)
+                if ok_bind and ann_cls ~= nil then
+                    local ann_list = luajava.newInstance("java.util.ArrayList", JCasUtil:select(inputCas, ann_cls))
+                    local it = ann_list:listIterator()
+                    while it:hasNext() do
+                        local ann = it:next()
+                        local begin_v = ann:getBegin()
+                        local end_v = ann:getEnd()
+                        local covered = ann:getCoveredText() or ""
 
-        local sofa_payload = p:toByteArray()
-        p:close()
+                        local p = MessagePack:newDefaultBufferPacker()
+                        p:packMapHeader(4)
+                        p:packString("type")
+                        p:packString(type_name)
+                        p:packString("begin")
+                        p:packInt(begin_v)
+                        p:packString("end")
+                        p:packInt(end_v)
+                        p:packString("coveredText")
+                        p:packString(covered)
+                        local ann_payload = p:toByteArray()
+                        p:close()
+                        write_chunk(outputStream, CHUNK_ANNOTATION, ann_payload)
+                    end
+                end
+            end
+        else
+            local text = inputCas:getSofaDataString() or ""
+            local p = MessagePack:newDefaultBufferPacker()
+            p:packMapHeader(2)
+            p:packString("type")
+            p:packString("uima.cas.Sofa")
+            p:packString("features")
+            p:packMapHeader(3)
+            p:packString("mimeType")
+            p:packString(mime)
+            p:packString("language")
+            p:packString(lang)
+            p:packString("data")
+            p:packString(text)
 
-        write_chunk(outputStream, CHUNK_SOFA, sofa_payload)
+            local sofa_payload = p:toByteArray()
+            p:close()
+            write_chunk(outputStream, CHUNK_SOFA, sofa_payload)
+        end
+
         write_chunk(outputStream, CHUNK_END, "")
     end)
 
@@ -411,8 +450,10 @@ function deserialize(inputCas, inputStream)
             if saw_start then
                 error("duplicate START chunk")
             end
-            if #payload ~= 0 then
-                error("START chunk must be empty")
+            if #payload > 0 then
+                local u = MessagePack:newDefaultUnpacker(payload)
+                u:skipValue()
+                u:close()
             end
             saw_start = true
 
@@ -421,12 +462,29 @@ function deserialize(inputCas, inputStream)
             local map_size = u:unpackMapHeader()
             local data = nil
             local mime = nil
+            local lang = nil
             for _ = 1, map_size do
                 local k = u:unpackString()
-                if k == "data" then
+                if k == "features" then
+                    local fs_size = u:unpackMapHeader()
+                    for __ = 1, fs_size do
+                        local fk = u:unpackString()
+                        if fk == "data" then
+                            data = u:unpackString()
+                        elseif fk == "mimeType" then
+                            mime = u:unpackString()
+                        elseif fk == "language" then
+                            lang = u:unpackString()
+                        else
+                            u:skipValue()
+                        end
+                    end
+                elseif k == "data" then
                     data = u:unpackString()
                 elseif k == "mimeType" then
                     mime = u:unpackString()
+                elseif k == "language" then
+                    lang = u:unpackString()
                 else
                     u:skipValue()
                 end
@@ -434,6 +492,9 @@ function deserialize(inputCas, inputStream)
             u:close()
             if data and mime then
                 inputCas:setSofaDataString(data, mime)
+                if lang and #lang > 0 then
+                    inputCas:setDocumentLanguage(lang)
+                end
             end
 
         elseif t == CHUNK_ANNOTATION or t == CHUNK_FEATURE_STRUCTURE then
@@ -458,12 +519,15 @@ end
 '''
 
     @classmethod
-    def generate_default_lua_script(cls, descriptor: AnnotatorDescriptor, typesystem_info: dict[str, Any]) -> str:
+    def generate_default_lua_script(
+        cls, descriptor: AnnotatorDescriptor, typesystem_info: dict[str, Any] | None = None
+    ) -> str:
+        del typesystem_info
+
         class TempConfig:
             def __init__(self, desc: AnnotatorDescriptor):
                 self.descriptor = desc
                 self.typesystem_xml_path = ""
 
         codec = cls(cast(AnnotatorConfig, TempConfig(descriptor)))
-        codec.typesystem_info = typesystem_info
         return codec._generate_lua_script()

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Generic, TypeVar
+from collections.abc import AsyncIterable
+from typing import Any, Generic, TypeVar
 
 from duui_py.codecs.base import Codec
-from duui_py.models import AnnotatorConfig, load_annotator_config
+from duui_py.models import AnnotatorConfig, DuuiDocument, DuuiResult, load_annotator_config
 
 RequestT = TypeVar("RequestT")
 ResponseT = TypeVar("ResponseT")
@@ -34,4 +35,30 @@ class DuuiAnnotator(_ConfigBackedAnnotator, Generic[RequestT, ResponseT], ABC):
 
     @abstractmethod
     async def process(self, doc: RequestT) -> ResponseT:
+        raise NotImplementedError
+
+
+class V1Process(ABC):
+    @abstractmethod
+    async def v1_process(
+        self, input_payload: DuuiDocument, parameters: dict[str, Any], result: DuuiResult
+    ) -> DuuiResult | None:
+        raise NotImplementedError
+
+
+class V2Process(ABC):
+    @abstractmethod
+    async def v2_process(self, input_payload: DuuiDocument, parameters: dict[str, Any]) -> AsyncIterable[DuuiResult]:
+        """Full-input V2 process: framework provides fully assembled input payload."""
+        raise NotImplementedError
+
+
+class V2ProcessChunks(ABC):
+    batch_size: int = 1
+
+    @abstractmethod
+    async def v2_process_chunks(
+        self, input_chunks: list[DuuiDocument], parameters: dict[str, Any]
+    ) -> AsyncIterable[DuuiResult]:
+        """Chunked V2 process: framework provides input in batches of full object chunks."""
         raise NotImplementedError

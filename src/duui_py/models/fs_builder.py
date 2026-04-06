@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from duui_py.models.duui import FeatureStructureKeyRef, FeatureStructureNode, FsRec, UimaValueOrKeyRef
+from duui_py.models.uima import normalize_uima_value
 
 
 def build_feature_structures(nodes: list[FeatureStructureNode]) -> list[FsRec]:
@@ -19,7 +20,7 @@ def build_feature_structures(nodes: list[FeatureStructureNode]) -> list[FsRec]:
             return {"$ref": key_to_id[v.key]}
         if isinstance(v, list):
             return [encode(x) for x in v]
-        return v
+        return normalize_uima_value(v)
 
     out: list[FsRec] = []
     for n in nodes:
@@ -31,6 +32,7 @@ def build_feature_structures(nodes: list[FeatureStructureNode]) -> list[FsRec]:
                 begin=n.begin,
                 end=n.end,
                 features={k: encode(v) for k, v in n.features.items()},
+                updated_features=list(n.updated_features),
             )
         )
     return out

@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import AsyncIterable, AsyncIterator
+from enum import Enum
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
-from duui_py.annotator import DuuiAnnotator
+from duui_py.annotator import DuuiAnnotator, V1Process, V2Process, V2ProcessChunks
 from duui_py.codecs.base import Codec, StreamingRequestDecoder, StreamingResponseEncoder
 from duui_py.logging import (
     configure_logger,
@@ -52,6 +53,49 @@ async def _maybe_await(value: object) -> object:
     return value
 
 
+def _merge_results(base: DuuiResult, chunk: DuuiResult) -> DuuiResult:
+    if chunk.sofa is not None:
+        base.sofa = chunk.sofa
+    if chunk.annotations:
+        base.annotations.extend(chunk.annotations)
+    if chunk.feature_structures:
+        base.feature_structures.extend(chunk.feature_structures)
+    if chunk.meta is not None:
+        base.meta = chunk.meta
+    if chunk.modification_meta is not None:
+        base.modification_meta = chunk.modification_meta
+    if chunk.errors:
+        base.errors.extend(chunk.errors)
+    return base
+
+
+def _merge_documents(base: DuuiDocument, chunk: DuuiDocument) -> DuuiDocument:
+    if chunk.parameters:
+        merged_parameters = dict(base.parameters)
+        merged_parameters.update(chunk.parameters)
+        base.parameters = merged_parameters
+    if chunk.view:
+        base.view = chunk.view
+    if chunk.sofa is not None:
+        base.sofa = chunk.sofa
+    if chunk.fs:
+        base.fs.extend(chunk.fs)
+    return base
+
+
+class ProcessingMode(str, Enum):
+    NORMAL = "normal"
+    STREAMING = "streaming"
+
+
+def _determine_processing_mode(codec: Codec[Any, Any], annotator: DuuiAnnotator[Any, Any]) -> ProcessingMode:
+    del annotator
+    codec_streaming = isinstance(codec, StreamingRequestDecoder) and isinstance(codec, StreamingResponseEncoder)
+    if codec_streaming:
+        return ProcessingMode.STREAMING
+    return ProcessingMode.NORMAL
+
+
 def create_app(
     annotator_cls: type[DuuiAnnotator[RequestT, ResponseT]],
     *,
@@ -68,9 +112,11 @@ def create_app(
     logging_settings = settings.logging
     codec: Codec[RequestT, ResponseT] = annotator.codec()
     _validate_lua_communication_layer(codec)
+    process_mode = _determine_processing_mode(codec, annotator)
 
     app = FastAPI(title=cfg.descriptor.name, version=cfg.descriptor.version)
     typesystem_xml = open(cfg.typesystem_xml_path, "rb").read()
+    logger = None
 
     # Define the core endpoints first
     @app.get("/v1/typesystem")
@@ -105,13 +151,10 @@ def create_app(
 
     @app.post("/v1/process")
     async def post_process(request: Request) -> Response:
-        supports_streaming = (
-            isinstance(codec, StreamingRequestDecoder)
-            and isinstance(codec, StreamingResponseEncoder)
-            and callable(getattr(annotator, "process_stream", None))
-        )
+        if logger is not None:
+            await logger.info(f"Process request started ({process_mode.value})")
 
-        if supports_streaming:
+        if process_mode == ProcessingMode.STREAMING:
             async def limited_body_stream() -> AsyncIterator[bytes]:
                 total = 0
                 async for chunk in request.stream():
@@ -156,14 +199,69 @@ def create_app(
             else:
                 handoff_input = validate_input_doc(decoded_input)  # type: ignore[arg-type]
 
-            process_stream_call = getattr(annotator, "process_stream")
-            processed_output = await _maybe_await(process_stream_call(handoff_input))
-            if not _is_async_iterable(processed_output):
-                raise HTTPException(status_code=500, detail="streaming annotator must return an async iterable")
+            async def iter_input_documents() -> AsyncIterator[DuuiDocument]:
+                if _is_async_iterable(handoff_input):
+                    async for item in cast(AsyncIterable[Any], handoff_input):
+                        if not isinstance(item, DuuiDocument):
+                            raise HTTPException(status_code=500, detail="streaming mode expects DuuiDocument input")
+                        yield item
+                    return
+                item = cast(Any, handoff_input)
+                if not isinstance(item, DuuiDocument):
+                    raise HTTPException(status_code=500, detail="streaming mode expects DuuiDocument input")
+                yield item
+
+            async def assemble_full_input() -> DuuiDocument:
+                base: DuuiDocument | None = None
+                async for item in iter_input_documents():
+                    if base is None:
+                        base = DuuiDocument(
+                            parameters=dict(item.parameters),
+                            view=item.view,
+                            sofa=item.sofa,
+                            fs=list(item.fs),
+                        )
+                    else:
+                        _merge_documents(base, item)
+                if base is None:
+                    raise HTTPException(status_code=400, detail="empty streaming input")
+                return base
+
+            async def processed_output_stream() -> AsyncIterator[ResponseT]:
+                if isinstance(annotator, V2ProcessChunks):
+                    batch_size = max(1, int(getattr(annotator, "batch_size", 1)))
+                    batch: list[DuuiDocument] = []
+                    params: dict[str, Any] = {}
+                    async for item in iter_input_documents():
+                        if item.parameters:
+                            params = dict(item.parameters)
+                        batch.append(item)
+                        if len(batch) >= batch_size:
+                            async for out in annotator.v2_process_chunks(batch, params):
+                                yield cast(ResponseT, out)
+                            batch = []
+                    if batch:
+                        async for out in annotator.v2_process_chunks(batch, params):
+                            yield cast(ResponseT, out)
+                    return
+
+                full_input = await assemble_full_input()
+                if isinstance(annotator, V2Process):
+                    async for out in annotator.v2_process(full_input, full_input.parameters):
+                        yield cast(ResponseT, out)
+                    return
+                if isinstance(annotator, V1Process):
+                    v1_result = DuuiResult()
+                    returned = await annotator.v1_process(full_input, full_input.parameters, v1_result)
+                    yield cast(ResponseT, returned if returned is not None else v1_result)
+                    return
+
+                result = await annotator.process(cast(RequestT, full_input))
+                yield cast(ResponseT, result)
 
             async def validated_result_stream() -> AsyncIterator[ResponseT]:
                 expected = cfg.descriptor.output.default_mime_type()
-                async for result in processed_output:  # type: ignore[assignment]
+                async for result in processed_output_stream():
                     if isinstance(result, DuuiResult) and result.sofa is not None:
                         if (
                             validation.strict_mime_validation
@@ -196,7 +294,10 @@ def create_app(
                         raise HTTPException(status_code=500, detail="response payload too large")
                     yield chunk
 
-            return StreamingResponse(limited_response_stream(), media_type=codec.response_media_type)
+            response = StreamingResponse(limited_response_stream(), media_type=codec.response_media_type)
+            if logger is not None:
+                await logger.info("Process request completed successfully")
+            return response
 
         body = await request.body()
         if limits.request_max_bytes is not None and len(body) > limits.request_max_bytes:
@@ -222,7 +323,22 @@ def create_app(
                     ),
                 )
 
-        result: ResponseT = await annotator.process(doc)
+        try:
+            if isinstance(doc, DuuiDocument) and isinstance(annotator, V1Process):
+                v1_result = DuuiResult()
+                returned = await annotator.v1_process(doc, doc.parameters, v1_result)
+                result = cast(ResponseT, returned if returned is not None else v1_result)
+            elif isinstance(doc, DuuiDocument) and isinstance(annotator, V2Process):
+                merged = DuuiResult()
+                async for partial in annotator.v2_process(doc, doc.parameters):
+                    _merge_results(merged, partial)
+                result = cast(ResponseT, merged)
+            else:
+                result = await annotator.process(doc)
+        except Exception as exc:  # noqa: BLE001
+            if logger is not None:
+                await logger.error(f"Process request failed with unexpected error: {exc}")
+            raise
 
         if isinstance(result, DuuiResult) and result.sofa is not None:
             expected = cfg.descriptor.output.default_mime_type()
@@ -247,7 +363,10 @@ def create_app(
         if limits.response_max_bytes is not None and len(response_body) > limits.response_max_bytes:
             raise HTTPException(status_code=500, detail="response payload too large")
 
-        return Response(content=response_body, media_type=codec.response_media_type)
+        response = Response(content=response_body, media_type=codec.response_media_type)
+        if logger is not None:
+            await logger.info("Process request completed successfully")
+        return response
 
     # Configure logging if enabled
     if logging_settings.enabled:
@@ -257,7 +376,7 @@ def create_app(
         )
         
         # Create sinks - use typing.cast to help type checker
-        from typing import cast, List as TypingList
+        from typing import List as TypingList
         sinks: TypingList[EventSink] = [cast(EventSink, StreamSink(stream_manager))]
         # Add console sink for debugging in development
         import os
@@ -310,26 +429,7 @@ def create_app(
                 # Clear context after request
                 clear_event_context()
         
-        # Get logger for enhancing the process endpoint
+        # Set logger for core endpoint lifecycle messages
         logger = get_event_logger()
-        
-        # Store the original post_process function
-        original_post_process = post_process
-        
-        # Create a new version with logging
-        @app.post("/v1/process")
-        async def logged_post_process(request: Request) -> Response:
-            await logger.info("Process request started")
-            
-            try:
-                response = await original_post_process(request)
-                await logger.info("Process request completed successfully")
-                return response
-            except HTTPException as e:
-                await logger.error(f"Process request failed with HTTP {e.status_code}: {e.detail}")
-                raise
-            except Exception as e:
-                await logger.error(f"Process request failed with unexpected error: {e}")
-                raise
 
     return app

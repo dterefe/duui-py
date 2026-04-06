@@ -12,9 +12,10 @@ from duui_py.models import (
     DuuiDocument,
     DuuiResult,
     FsRec,
-    SofaPayload,
+    SoFa,
 )
 from duui_py.models.fs_builder import build_feature_structures
+from duui_py.models.uima import normalize_uima_value
 
 MsgpackScalar: TypeAlias = None | bool | int | float | str | bytes
 MsgpackValue: TypeAlias = MsgpackScalar | list["MsgpackValue"] | dict[str, "MsgpackValue"]
@@ -24,12 +25,12 @@ MsgpackObject: TypeAlias = dict[str, MsgpackValue]
 class WireEnvelopeIn(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     view: str = ""
-    sofa: SofaPayload
+    sofa: SoFa
     fs: list[FsRec] = Field(default_factory=list)
 
 
 class WireEnvelopeOut(BaseModel):
-    sofa: Optional[SofaPayload] = None
+    sofa: Optional[SoFa] = None
     fs: list[FsRec] = Field(default_factory=list)
     meta: Optional[AnnotationMeta] = None
     modification_meta: Optional[DocumentModification] = None
@@ -48,11 +49,22 @@ def encode_msgpack(obj: MsgpackObject) -> bytes:
 
 
 def wire_to_document(env: WireEnvelopeIn) -> DuuiDocument:
+    normalized_fs = [
+        FsRec(
+            id=item.id,
+            ref=item.ref,
+            type=item.type,
+            begin=item.begin,
+            end=item.end,
+            features={k: normalize_uima_value(v) for k, v in item.features.items()},
+        )
+        for item in env.fs
+    ]
     return DuuiDocument(
         parameters=env.parameters,
         view=env.view,
         sofa=env.sofa,
-        fs=env.fs,
+        fs=normalized_fs,
     )
 
 
@@ -69,7 +81,16 @@ def result_to_wire(result: DuuiResult) -> WireEnvelopeOut:
     fs: list[FsRec] = []
     next_id = 1
     for a in result.annotations:
-        fs.append(FsRec(id=next_id, ref=a.ref, type=a.type, begin=a.begin, end=a.end, features=a.features))
+        fs.append(
+            FsRec(
+                id=next_id,
+                ref=a.ref,
+                type=a.type,
+                begin=a.begin,
+                end=a.end,
+                features={k: normalize_uima_value(v) for k, v in a.feature_map().items()},
+            )
+        )
         next_id += 1
 
     return WireEnvelopeOut(
