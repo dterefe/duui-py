@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from typing import Annotated, Any, Literal, Optional
+
 from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
-from typing import Optional, Any
 from typing_extensions import TypedDict
+
 from duui_py.settings import get_settings
 
 FeatureStructureRef = TypedDict("FeatureStructureRef", {"$ref": int})
@@ -42,6 +44,8 @@ class FeatureStructure(BaseModel):
 
     ref: Optional[int] = None
     type: str
+    begin: Optional[int] = None
+    end: Optional[int] = Field(default=None, alias="end")
     features: dict[str, UimaValue] = Field(default_factory=dict)
 
     @classmethod
@@ -141,14 +145,13 @@ class Annotation(FeatureStructure):
     end: int = Field(alias="end")
 
 
-class SoFa(FeatureStructure):
+class SoFaBase(FeatureStructure):
     type: str = "uima.cas.Sofa"
     mimeType: str
     language: str
-    data: str | bytes
 
     @model_validator(mode="after")
-    def validate_mime_and_data(self) -> "SoFa":
+    def validate_mime(self) -> "SoFaBase":
         validation = get_settings().validation
 
         if not self.mimeType:
@@ -159,11 +162,121 @@ class SoFa(FeatureStructure):
         base = self.mimeType.split(";", 1)[0].strip().lower()
         if validation.strict_mime_validation and ("/" not in base or base.endswith("/*") or "*" in base):
             raise ValueError("sofa.mimeType must be a concrete mime type (no wildcards)")
-
-        is_text = base.startswith("text/")
-        if validation.strict_sofa_data_type_validation:
-            if is_text and not isinstance(self.data, str):
-                raise TypeError("text SofA requires string data")
-            if not is_text and not isinstance(self.data, (bytes, bytearray)):
-                raise TypeError("non-text SofA requires bytes data")
         return self
+
+
+class SoFaText(SoFaBase):
+    kind: Literal["text"] = "text"
+    text: str
+
+    @model_validator(mode="after")
+    def validate_text(self) -> "SoFaText":
+        validation = get_settings().validation
+        if validation.strict_sofa_data_type_validation and not isinstance(self.text, str):
+            raise TypeError("SoFaText.text must be string")
+        return self
+
+
+class SoFaBytes(SoFaBase):
+    kind: Literal["bytes"] = "bytes"
+    bytes: bytes
+
+    @model_validator(mode="after")
+    def validate_bytes(self) -> "SoFaBytes":
+        validation = get_settings().validation
+        if validation.strict_sofa_data_type_validation and not isinstance(self.bytes, (bytes, bytearray)):
+            raise TypeError("SoFaBytes.bytes must be bytes")
+        return self
+
+
+class SoFaURI(SoFaBase):
+    kind: Literal["uri"] = "uri"
+    uri: str
+
+
+class SoFaAnnotationSpans(SoFaBase):
+    kind: Literal["annotation_spans"] = "annotation_spans"
+    annotationType: str
+    spans: list[str] = Field(default_factory=list)
+
+
+SoFa = Annotated[SoFaText | SoFaBytes | SoFaURI | SoFaAnnotationSpans, Field(discriminator="kind")]
+
+
+def sofa_default_for_mime(*, mime_type: str, language: str) -> SoFa:
+    base = mime_type.split(";", 1)[0].strip().lower()
+    if base.startswith("text/"):
+        return SoFaText(mimeType=mime_type, language=language, text="")
+    if base == "application/uri":
+        return SoFaURI(mimeType=mime_type, language=language, uri="")
+    if base.startswith("application/x-uima-annotation-spans"):
+        return SoFaAnnotationSpans(mimeType=mime_type, language=language, annotationType="", spans=[])
+    return SoFaBytes(mimeType=mime_type, language=language, bytes=b"")
+
+
+def sofa_from_wire(*, mime_type: str, language: str, data: Any, annotation_type: str | None = None, spans: list[str] | None = None) -> SoFa:
+    base = mime_type.split(";", 1)[0].strip().lower()
+    if base.startswith("text/"):
+        if not isinstance(data, str):
+            raise TypeError("text SofA requires string data")
+        return SoFaText(mimeType=mime_type, language=language, text=data)
+    if base == "application/uri":
+        if not isinstance(data, str):
+            raise TypeError("uri SofA requires string uri")
+        return SoFaURI(mimeType=mime_type, language=language, uri=data)
+    if base.startswith("application/x-uima-annotation-spans"):
+        return SoFaAnnotationSpans(
+            mimeType=mime_type,
+            language=language,
+            annotationType=annotation_type or "",
+            spans=spans or ([] if not isinstance(data, list) else [str(x) for x in data]),
+        )
+    if isinstance(data, str):
+        try:
+            data = data.encode("latin-1")
+        except UnicodeEncodeError:
+            # Lua msgpack transport currently serializes bytes as string payload.
+            # If unpacked text contains non-latin1 code points, utf-8 round-trip
+            # preserves the original byte stream for valid utf-8 sequences.
+            data = data.encode("utf-8")
+    if not isinstance(data, (bytes, bytearray)):
+        raise TypeError("bytes SofA requires bytes data")
+    return SoFaBytes(mimeType=mime_type, language=language, bytes=bytes(data))
+
+
+def sofa_to_wire_data(sofa: SoFa) -> Any:
+    if isinstance(sofa, SoFaText):
+        return sofa.text
+    if isinstance(sofa, SoFaBytes):
+        return sofa.bytes.decode("latin-1")
+    if isinstance(sofa, SoFaURI):
+        return sofa.uri
+    return list(sofa.spans)
+
+
+def sofa_annotation_type(sofa: SoFa) -> str | None:
+    if isinstance(sofa, SoFaAnnotationSpans):
+        return sofa.annotationType
+    return None
+
+
+def sofa_kind(sofa: SoFa) -> str:
+    if isinstance(sofa, SoFaText):
+        return "text"
+    if isinstance(sofa, SoFaBytes):
+        return "bytes"
+    if isinstance(sofa, SoFaURI):
+        return "uri"
+    return "annotation_spans"
+
+
+def sofa_text_value(sofa: SoFa) -> str | None:
+    if isinstance(sofa, SoFaText):
+        return sofa.text
+    return None
+
+
+def sofa_bytes_value(sofa: SoFa) -> bytes | None:
+    if isinstance(sofa, SoFaBytes):
+        return sofa.bytes
+    return None

@@ -5,20 +5,14 @@ from time import time
 from duui_py.annotator import DuuiAnnotator
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.models import (
-    AnnotationMeta,
-    DocumentModification,
-    DuuiDocument,
-    DuuiResult,
-    FeatureStructureKeyRef,
-    FeatureStructureNode,
-)
+from duui_py.models import AnnotatorMetaData, DocumentModification, V1RequestEnvelope, DuuiResult
+from duui_py.models.uima import FeatureStructure, sofa_text_value
 
 ARGUMENT_TYPE = "org.texttechnologylab.annotation.Argument"
 COMMENT_TYPE = "org.texttechnologylab.annotation.AnnotationComment"
 
 
-class ArgumentAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
+class ArgumentAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
     config_path = "annotator_config.json"
 
     def codec(self) -> MsgPackLuaCodec:
@@ -42,65 +36,53 @@ class ArgumentAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
         reason = f"pos={pos}, neg={neg}, topic_hit={topic_hit}"
         return label, confidence, reason
 
-    async def process(self, doc: DuuiDocument) -> DuuiResult:
+    async def process(self, doc: V1RequestEnvelope) -> DuuiResult:
         topic = str(doc.parameters.get("topic") or "general")
         selection_types_raw = str(doc.parameters.get("selection_types") or "").strip()
         selection_types = {s.strip() for s in selection_types_raw.split(",") if s.strip()}
+        text = sofa_text_value(doc.sofa) or ""
 
         spans = [
             fs
             for fs in doc.fs
             if fs.begin is not None and fs.end is not None and fs.end > fs.begin and (not selection_types or fs.type in selection_types)
         ]
-        if not spans and doc.text:
-            from duui_py.models import FsRec
+        if not spans and text:
+            spans = [FeatureStructure(type="uima.tcas.Annotation", begin=0, end=len(text), features={})]
 
-            spans = [FsRec(id=1, type="uima.tcas.Annotation", begin=0, end=len(doc.text), features={})]
-
-        text = doc.text or ""
-        nodes: list[FeatureStructureNode] = []
-
-        for i, span in enumerate(spans):
+        fs_items: list[FeatureStructure] = []
+        for span in spans:
             covered = text[span.begin : span.end] if text else ""
             label, confidence, reason = self._score(covered, topic)
 
-            arg_key = f"arg-{i}"
-            nodes.append(
-                FeatureStructureNode(
-                    key=arg_key,
+            fs_items.append(
+                FeatureStructure(
                     type=ARGUMENT_TYPE,
                     begin=span.begin,
                     end=span.end,
-                    features={"topic": topic},
+                    features={
+                        "topic": topic,
+                        "label": label,
+                        "confidence": round(confidence, 3),
+                        "reason": reason,
+                    },
+                )
+            )
+            fs_items.append(
+                FeatureStructure(
+                    type=COMMENT_TYPE,
+                    begin=span.begin,
+                    end=span.end,
+                    features={
+                        "key": "label",
+                        "value": label,
+                    },
                 )
             )
 
-            comment_specs = [
-                ("label", label),
-                ("confidence", f"{confidence:.3f}"),
-                ("reason", reason),
-            ]
-            comment_refs: list[FeatureStructureKeyRef] = []
-            for j, (key, value) in enumerate(comment_specs):
-                comment_key = f"arg-{i}-comment-{j}"
-                comment_refs.append(FeatureStructureKeyRef(key=comment_key))
-                nodes.append(
-                    FeatureStructureNode(
-                        key=comment_key,
-                        type=COMMENT_TYPE,
-                        features={
-                            "reference": FeatureStructureKeyRef(key=arg_key),
-                            "key": key,
-                            "value": value,
-                        },
-                    )
-                )
-
-            nodes[-(len(comment_specs) + 1)].features["arguments"] = comment_refs
-
         return DuuiResult(
-            feature_structures=nodes,
-            meta=AnnotationMeta(
+            feature_structures=fs_items,
+            meta=AnnotatorMetaData(
                 name=self.config.descriptor.name,
                 version=self.config.descriptor.version,
                 modelName="heuristic-argument",

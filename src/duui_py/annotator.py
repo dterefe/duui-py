@@ -4,11 +4,22 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterable
 from typing import Any, Generic, TypeVar
 
+from pydantic import BaseModel, Field
+
 from duui_py.codecs.base import Codec
-from duui_py.models import AnnotatorConfig, DuuiDocument, DuuiResult, load_annotator_config
+from duui_py.models import AnnotatorConfig, DuuiResult, load_annotator_config
+from duui_py.models.uima import FeatureStructure
+from duui_py.models.uima import SoFaBytes, SoFaText, SoFaURI, SoFaAnnotationSpans
 
 RequestT = TypeVar("RequestT")
 ResponseT = TypeVar("ResponseT")
+PayloadT = TypeVar("PayloadT", bound="V1Payload")
+ResultT = TypeVar("ResultT", bound=DuuiResult)
+
+
+class V1Payload(BaseModel):
+    view: str = ""
+    feature_structures: dict[str, list[FeatureStructure]] = Field(default_factory=dict)
 
 
 class _ConfigBackedAnnotator(ABC):
@@ -38,27 +49,49 @@ class DuuiAnnotator(_ConfigBackedAnnotator, Generic[RequestT, ResponseT], ABC):
         raise NotImplementedError
 
 
-class V1Process(ABC):
-    @abstractmethod
-    async def v1_process(
-        self, input_payload: DuuiDocument, parameters: dict[str, Any], result: DuuiResult
-    ) -> DuuiResult | None:
-        raise NotImplementedError
+class DUUIProcess(Generic[PayloadT, ResultT], ABC):
+    payload_model: type[V1Payload] = V1Payload
 
 
-class V2Process(ABC):
-    @abstractmethod
-    async def v2_process(self, input_payload: DuuiDocument, parameters: dict[str, Any]) -> AsyncIterable[DuuiResult]:
-        """Full-input V2 process: framework provides fully assembled input payload."""
-        raise NotImplementedError
+class V1Process(DUUIProcess[PayloadT, ResultT], ABC):
+    async def process_text(
+        self, sofa: SoFaText, payload: PayloadT, parameters: dict[str, Any]
+    ) -> ResultT | None:
+        raise NotImplementedError("process_text not implemented")
+
+    async def process_bytes(
+        self, sofa: SoFaBytes, payload: PayloadT, parameters: dict[str, Any]
+    ) -> ResultT | None:
+        raise NotImplementedError("process_bytes not implemented")
+
+    async def process_uri(
+        self, sofa: SoFaURI, payload: PayloadT, parameters: dict[str, Any]
+    ) -> ResultT | None:
+        raise NotImplementedError("process_uri not implemented")
+
+    async def process_spans(
+        self, sofa: SoFaAnnotationSpans, payload: PayloadT, parameters: dict[str, Any]
+    ) -> ResultT | None:
+        raise NotImplementedError("process_spans not implemented")
 
 
-class V2ProcessChunks(ABC):
-    batch_size: int = 1
-
-    @abstractmethod
-    async def v2_process_chunks(
-        self, input_chunks: list[DuuiDocument], parameters: dict[str, Any]
+class V1AsyncProcess(V1Process[PayloadT, DuuiResult], ABC):
+    async def process_text(
+        self, sofa: SoFaText, payload: PayloadT, parameters: dict[str, Any]
     ) -> AsyncIterable[DuuiResult]:
-        """Chunked V2 process: framework provides input in batches of full object chunks."""
-        raise NotImplementedError
+        raise NotImplementedError("process_text not implemented")
+
+    async def process_bytes(
+        self, sofa: SoFaBytes, payload: PayloadT, parameters: dict[str, Any]
+    ) -> AsyncIterable[DuuiResult]:
+        raise NotImplementedError("process_bytes not implemented")
+
+    async def process_uri(
+        self, sofa: SoFaURI, payload: PayloadT, parameters: dict[str, Any]
+    ) -> AsyncIterable[DuuiResult]:
+        raise NotImplementedError("process_uri not implemented")
+
+    async def process_spans(
+        self, sofa: SoFaAnnotationSpans, payload: PayloadT, parameters: dict[str, Any]
+    ) -> AsyncIterable[DuuiResult]:
+        raise NotImplementedError("process_spans not implemented")

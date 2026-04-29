@@ -7,9 +7,20 @@ from typing import Any, cast
 import msgpack
 
 from duui_py.codecs.base import Codec
-from duui_py.models import AnnotatorConfig, AnnotatorDescriptor, DuuiDocument, DuuiResult, FsRec, SoFa
-from duui_py.models.fs_builder import build_feature_structures
-from duui_py.models.uima import normalize_uima_value
+from duui_py.models import (
+    AnnotatorConfig,
+    AnnotatorDescriptor,
+    V1RequestEnvelope,
+    DuuiResult,
+    SoFa,
+    SoFaAnnotationSpans,
+    sofa_annotation_type,
+    sofa_default_for_mime,
+    sofa_from_wire,
+    sofa_kind,
+    sofa_to_wire_data,
+)
+from duui_py.models.uima import FeatureStructure, normalize_uima_value
 
 CHUNK_START = 0x01
 CHUNK_SOFA = 0x02
@@ -19,7 +30,7 @@ CHUNK_END = 0x05
 CHUNK_ERROR = 0x06
 
 
-class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
+class MsgPackLuaCodec(Codec[V1RequestEnvelope, DuuiResult]):
     """Descriptor-driven Lua communication layer codec with strict framed msgpack chunks."""
 
     name = "msgpack-lua"
@@ -30,6 +41,16 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
         self.config = config
         self.descriptor = config.descriptor
 
+    def _default_input_mime(self) -> str:
+        resolved = self.descriptor.input.first_available()
+        return resolved.mimeType if resolved and resolved.mimeType else "text/plain; charset=utf-8"
+
+    def _default_input_language(self) -> str:
+        resolved = self.descriptor.input.first_available()
+        if resolved and resolved.languages:
+            return resolved.languages[0]
+        return "x-unspecified"
+
     def communication_layer_content(self) -> dict[str, str | int]:
         return {
             "kind": "custom",
@@ -38,7 +59,7 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
             "spec": self._generate_lua_script(),
         }
 
-    def decode_request(self, body: bytes) -> DuuiDocument:
+    def decode_request(self, body: bytes) -> V1RequestEnvelope:
         chunks = self._parse_chunked_stream(body)
         if not chunks:
             raise ValueError("empty chunk stream")
@@ -60,7 +81,7 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
             raise ValueError("END chunk must not contain payload")
 
         sofa_payload: SoFa | None = None
-        fs_items: list[FsRec] = []
+        fs_items: list[FeatureStructure] = []
 
         for index, (chunk_type, payload) in enumerate(chunks):
             if chunk_type == CHUNK_START:
@@ -75,14 +96,19 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
                 raise ValueError(self._decode_error_payload(payload))
             if chunk_type == CHUNK_SOFA:
                 unpacked = self._decode_msgpack_map(payload)
-                if "features" in unpacked:
-                    sofa_payload = SoFa.model_validate(unpacked)
-                else:
-                    sofa_payload = SoFa(
-                        mimeType=str(unpacked.get("mimeType", self.descriptor.input.default_mime_type())),
-                        language=str(unpacked.get("language", self.descriptor.input.default_language())),
-                        data=cast(str | bytes, unpacked.get("data", "")),
-                    )
+                mime_value = unpacked.get("mimeType", self._default_input_mime())
+                lang_value = unpacked.get("language", self._default_input_language())
+                if not isinstance(mime_value, str) or not isinstance(lang_value, str):
+                    raise ValueError("invalid SOFA payload mimeType/language")
+                annotation_type = unpacked.get("annotationType")
+                spans = unpacked.get("spans")
+                sofa_payload = sofa_from_wire(
+                    mime_type=mime_value,
+                    language=lang_value,
+                    data=unpacked.get("data"),
+                    annotation_type=annotation_type if isinstance(annotation_type, str) else None,
+                    spans=[str(v) for v in spans] if isinstance(spans, list) else None,
+                )
                 continue
             if chunk_type in (CHUNK_ANNOTATION, CHUNK_FEATURE_STRUCTURE):
                 unpacked = self._decode_msgpack_map(payload)
@@ -92,46 +118,81 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
                 if isinstance(covered_text, str):
                     features["coveredText"] = covered_text
                 fs_items.append(
-                    FsRec(
-                        id=int(unpacked.get("id", 0)),
+                    FeatureStructure(
                         ref=cast(int | None, unpacked.get("ref")),
                         type=str(unpacked.get("type", "")),
                         begin=cast(int | None, unpacked.get("begin")),
                         end=cast(int | None, unpacked.get("end")),
                         features=features,
-                        updated_features=[
-                            str(v)
-                            for v in cast(list[Any], unpacked.get("updated_features", []))
-                            if isinstance(v, str)
-                        ],
                     )
                 )
                 continue
             raise ValueError(f"unknown chunk type: 0x{chunk_type:02X}")
 
+        if sofa_payload is None and fs_items:
+            spans: list[str] = []
+            annotation_type = ""
+            for item in fs_items:
+                if not annotation_type and item.type:
+                    annotation_type = item.type
+                covered = item.features.get("coveredText")
+                if isinstance(covered, str):
+                    spans.append(covered)
+            if annotation_type:
+                sofa_payload = SoFaAnnotationSpans(
+                    mimeType="application/x-uima-annotation-spans",
+                    language=self._default_input_language(),
+                    annotationType=annotation_type,
+                    spans=spans,
+                )
+
         if sofa_payload is None:
-            sofa_payload = SoFa(
-                mimeType=self.descriptor.input.default_mime_type(),
-                language=self.descriptor.input.default_language(),
-                data="",
+            sofa_payload = sofa_default_for_mime(
+                mime_type=self._default_input_mime(),
+                language=self._default_input_language(),
             )
 
-        return DuuiDocument(parameters=parameters, view=view, sofa=sofa_payload, fs=fs_items)
+        return V1RequestEnvelope(parameters=parameters, view=view, sofa=sofa_payload, fs=fs_items)
 
     def encode_response(self, result: DuuiResult) -> bytes:
         chunks: list[tuple[int, bytes]] = [(CHUNK_START, b"")]
 
         if result.sofa is not None:
+            payload_map: dict[str, Any] = {
+                "type": "uima.cas.Sofa",
+                "kind": sofa_kind(result.sofa),
+                "mimeType": result.sofa.mimeType,
+                "language": result.sofa.language,
+                "data": sofa_to_wire_data(result.sofa),
+            }
+            annotation_type = sofa_annotation_type(result.sofa)
+            if annotation_type:
+                payload_map["annotationType"] = annotation_type
+                payload_map["spans"] = list(cast(SoFaAnnotationSpans, result.sofa).spans)
             chunks.append(
                 (
                     CHUNK_SOFA,
-                    msgpack.packb(result.sofa.model_dump(by_alias=True), use_bin_type=True),
+                    msgpack.packb(payload_map, use_bin_type=True),
                 )
             )
 
         if result.feature_structures:
-            for fs_item in build_feature_structures(result.feature_structures):
-                chunks.append((CHUNK_FEATURE_STRUCTURE, msgpack.packb(fs_item.model_dump(by_alias=True), use_bin_type=True)))
+            for fs_item in result.feature_structures:
+                chunks.append(
+                    (
+                        CHUNK_FEATURE_STRUCTURE,
+                        msgpack.packb(
+                            {
+                                "ref": fs_item.ref,
+                                "type": fs_item.type,
+                                "begin": fs_item.begin,
+                                "end": fs_item.end,
+                                "features": {k: normalize_uima_value(v) for k, v in fs_item.feature_map().items()},
+                            },
+                            use_bin_type=True,
+                        ),
+                    )
+                )
 
         if result.annotations:
             for annotation in result.annotations:
@@ -223,8 +284,12 @@ class MsgPackLuaCodec(Codec[DuuiDocument, DuuiResult]):
 -- Auto-generated from annotator descriptor
 -- Framing: 1-byte type + 4-byte big-endian length + payload
 
-MessagePack = luajava.bindClass("org.msgpack.core.MessagePack")
-JCasUtil = luajava.bindClass("org.apache.uima.fit.util.JCasUtil")
+if MessagePack == nil then
+    MessagePack = luajava.bindClass("org.msgpack.core.MessagePack")
+end
+if JCasUtil == nil then
+    JCasUtil = luajava.bindClass("org.apache.uima.fit.util.JCasUtil")
+end
 
 local descriptor = json.decode([=[{descriptor_json}]=])
 
@@ -253,11 +318,43 @@ local function write_chunk(output_stream, chunk_type, payload)
 end
 
 local function read_exact(input_stream, n)
-    local data = input_stream:read(n)
-    if not data or #data < n then
-        return nil
+    if n <= 0 then
+        return ""
     end
-    return data
+
+    local remaining = n
+    local parts = {{}}
+
+    while remaining > 0 do
+        local chunk = input_stream:read(remaining)
+        if chunk == nil then
+            return nil
+        end
+
+        local chunk_type = type(chunk)
+        if chunk_type == "number" then
+            if chunk < 0 then
+                return nil
+            end
+            parts[#parts + 1] = string.char(chunk)
+            remaining = remaining - 1
+        elseif chunk_type == "string" then
+            local chunk_len = #chunk
+            if chunk_len == 0 then
+                return nil
+            end
+            if chunk_len > remaining then
+                chunk = string.sub(chunk, 1, remaining)
+                chunk_len = #chunk
+            end
+            parts[#parts + 1] = chunk
+            remaining = remaining - chunk_len
+        else
+            return nil
+        end
+    end
+
+    return table.concat(parts)
 end
 
 local function read_chunk(input_stream)
@@ -345,34 +442,42 @@ function serialize(inputCas, outputStream, parameters, sourceView)
     local ok, err = pcall(function()
         write_chunk(outputStream, CHUNK_START, pack_start_payload(parameters, sourceView))
 
-        local mime = "text/plain; charset=utf-8"
-        if descriptor and descriptor.input and descriptor.input.sofa then
-            local ds = descriptor.input.sofa
-            if ds.text and ds.text.mimeType then
-                mime = ds.text.mimeType
-            elseif ds.bytes and ds.bytes.mimeType then
-                mime = ds.bytes.mimeType
-            elseif ds.uri and ds.uri.mimeType then
-                mime = ds.uri.mimeType
+        local function domain_first_mime(domain_name)
+            if not descriptor or not descriptor.input or not descriptor.input[domain_name] then
+                return nil
             end
+            local domain = descriptor.input[domain_name]
+            if domain.default and domain.default.mimeType then
+                return domain.default.mimeType
+            end
+            for k, v in pairs(domain) do
+                if k ~= "default" and k ~= "types" and k ~= "languages" and type(v) == "table" and v.mimeType then
+                    return v.mimeType
+                end
+            end
+            return nil
         end
+        local mime = domain_first_mime("text") or domain_first_mime("bytes") or domain_first_mime("uri") or "text/plain; charset=utf-8"
+        local prefer_bytes_sofa = domain_first_mime("bytes") ~= nil and domain_first_mime("text") == nil
         local lang = inputCas:getDocumentLanguage() or "x-unspecified"
-        if descriptor and descriptor.input and descriptor.input.sofa then
-            local ds = descriptor.input.sofa
-            if ds.text and ds.text.language then
-                lang = ds.text.language
-            elseif ds.bytes and ds.bytes.language then
-                lang = ds.bytes.language
-            elseif ds.uri and ds.uri.language then
-                lang = ds.uri.language
-            end
+        if descriptor and descriptor.input and descriptor.input.languages and #descriptor.input.languages > 0 then
+            lang = descriptor.input.languages[1]
         end
         local annotation_selection = nil
-        if descriptor and descriptor.input and descriptor.input.sofa and descriptor.input.sofa.annotation then
-            annotation_selection = descriptor.input.sofa.annotation
+        if descriptor and descriptor.input and descriptor.input.annotation and descriptor.input.annotation.types then
+            annotation_selection = {{}}
+            for _, type_list in pairs(descriptor.input.annotation.types) do
+                if type(type_list) == "table" then
+                    for i = 1, #type_list do
+                        annotation_selection[#annotation_selection + 1] = type_list[i]
+                    end
+                end
+            end
         end
 
         if annotation_selection and #annotation_selection > 0 then
+            local selected_type = annotation_selection[1]
+            local spans = {{}}
             for i = 1, #annotation_selection do
                 local type_name = annotation_selection[i]
                 local ok_bind, ann_cls = pcall(function()
@@ -383,32 +488,74 @@ function serialize(inputCas, outputStream, parameters, sourceView)
                     local it = ann_list:listIterator()
                     while it:hasNext() do
                         local ann = it:next()
-                        local begin_v = ann:getBegin()
-                        local end_v = ann:getEnd()
                         local covered = ann:getCoveredText() or ""
-
-                        local p = MessagePack:newDefaultBufferPacker()
-                        p:packMapHeader(4)
-                        p:packString("type")
-                        p:packString(type_name)
-                        p:packString("begin")
-                        p:packInt(begin_v)
-                        p:packString("end")
-                        p:packInt(end_v)
-                        p:packString("coveredText")
-                        p:packString(covered)
-                        local ann_payload = p:toByteArray()
-                        p:close()
-                        write_chunk(outputStream, CHUNK_ANNOTATION, ann_payload)
+                        spans[#spans + 1] = covered
                     end
                 end
             end
-        else
-            local text = inputCas:getSofaDataString() or ""
             local p = MessagePack:newDefaultBufferPacker()
-            p:packMapHeader(2)
+            p:packMapHeader(7)
             p:packString("type")
             p:packString("uima.cas.Sofa")
+            p:packString("kind")
+            p:packString("annotation_spans")
+            p:packString("mimeType")
+            p:packString("application/x-uima-annotation-spans")
+            p:packString("language")
+            p:packString(lang)
+            p:packString("annotationType")
+            p:packString(selected_type)
+            p:packString("spans")
+            p:packArrayHeader(#spans)
+            for i = 1, #spans do
+                p:packString(spans[i])
+            end
+            p:packString("data")
+            p:packArrayHeader(#spans)
+            for i = 1, #spans do
+                p:packString(spans[i])
+            end
+            local sofa_payload = p:toByteArray()
+            p:close()
+            write_chunk(outputStream, CHUNK_SOFA, sofa_payload)
+        else
+            local p = MessagePack:newDefaultBufferPacker()
+            p:packMapHeader(6)
+            p:packString("type")
+            p:packString("uima.cas.Sofa")
+            p:packString("kind")
+            if prefer_bytes_sofa then
+                p:packString("bytes")
+            else
+                p:packString("text")
+            end
+            p:packString("mimeType")
+            p:packString(mime)
+            p:packString("language")
+            p:packString(lang)
+            p:packString("data")
+            local sofa_data_for_features = nil
+            if prefer_bytes_sofa then
+                local sofa_array = inputCas:getSofaDataArray()
+                local parts = {{}}
+                if sofa_array ~= nil then
+                    local size = sofa_array:size()
+                    for i = 0, size - 1 do
+                        local b = sofa_array:get(i)
+                        if b < 0 then
+                            b = b + 256
+                        end
+                        parts[#parts + 1] = string.char(b)
+                    end
+                end
+                local sofa_text_bytes = table.concat(parts)
+                p:packString(sofa_text_bytes)
+                sofa_data_for_features = sofa_text_bytes
+            else
+                local text = inputCas:getSofaDataString() or ""
+                p:packString(text)
+                sofa_data_for_features = text
+            end
             p:packString("features")
             p:packMapHeader(3)
             p:packString("mimeType")
@@ -416,7 +563,11 @@ function serialize(inputCas, outputStream, parameters, sourceView)
             p:packString("language")
             p:packString(lang)
             p:packString("data")
-            p:packString(text)
+            if prefer_bytes_sofa then
+                p:packString(sofa_data_for_features)
+            else
+                p:packString(sofa_data_for_features)
+            end
 
             local sofa_payload = p:toByteArray()
             p:close()
@@ -509,7 +660,26 @@ function deserialize(inputCas, inputStream)
             return
 
         elseif t == CHUNK_ERROR then
-            error("received ERROR chunk")
+            local message = "received ERROR chunk"
+            if #payload > 0 then
+                local ok_unpack, unpack_err = pcall(function()
+                    local u = MessagePack:newDefaultUnpacker(payload)
+                    local map_size = u:unpackMapHeader()
+                    for _ = 1, map_size do
+                        local k = u:unpackString()
+                        if k == "message" then
+                            message = "received ERROR chunk: " .. tostring(u:unpackString())
+                        else
+                            u:skipValue()
+                        end
+                    end
+                    u:close()
+                end)
+                if not ok_unpack then
+                    message = message .. " (failed to decode payload: " .. tostring(unpack_err) .. ")"
+                end
+            end
+            error(message)
 
         else
             error("unknown chunk type: " .. tostring(t))

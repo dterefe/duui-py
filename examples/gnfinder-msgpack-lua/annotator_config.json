@@ -1,7 +1,9 @@
 {
   "meta": {
     "implementation_lang": "Python",
-    "meta": {"example": "duui-gnfinder migration"},
+    "meta": {
+      "example": "duui-gnfinder migration"
+    },
     "settings": {
       "validation": {
         "strict_mime_validation": true,
@@ -10,8 +12,14 @@
         "strict_sofa_data_type_validation": true,
         "strict_descriptor_mime_pattern_validation": true
       },
-      "limits": {"request_max_bytes": null, "response_max_bytes": null},
-      "errors": {"fail_on_codec_error": true, "include_validation_details": true},
+      "limits": {
+        "request_max_bytes": null,
+        "response_max_bytes": null
+      },
+      "errors": {
+        "fail_on_codec_error": true,
+        "include_validation_details": true
+      },
       "logging": {
         "enabled": true,
         "stream_timeout_minutes": 5,
@@ -24,20 +32,45 @@
     "name": "gnfinder-msgpack-lua",
     "version": "1.0.0",
     "input": {
-      "sofa": {
-        "text": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"},
-        "annotation": []
-      },
-      "types": []
+      "types": {},
+      "text": {
+        "default": {
+          "types": {},
+          "mimeType": "text/plain; charset=utf-8",
+          "languages": [
+            "x-unspecified"
+          ]
+        }
+      }
     },
     "output": {
-      "sofa": {"text": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"}},
-      "types": ["org.texttechnologylab.annotation.biofid.gnfinder.Taxon"]
+      "types": {
+        "Taxon": [
+          "org.texttechnologylab.annotation.biofid.gnfinder.Taxon"
+        ]
+      },
+      "text": {
+        "default": {
+          "types": {},
+          "mimeType": "text/plain; charset=utf-8",
+          "languages": [
+            "x-unspecified"
+          ]
+        }
+      }
     }
   },
   "typesystem_xml_path": "TypeSystemGNFinder.xml",
   "parameters_schema": {
-    "lang": {"type": "string", "default": "detect", "description": "Language hint for name detection."},
-    "verify": {"type": "boolean", "default": true, "description": "Keep parity with GNFinder verify parameter."}
+    "lang": {
+      "type": "string",
+      "default": "detect",
+      "description": "Language hint for name detection."
+    },
+    "verify": {
+      "type": "boolean",
+      "default": true,
+      "description": "Keep parity with GNFinder verify parameter."
+    }
   }
 }

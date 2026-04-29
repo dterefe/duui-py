@@ -7,8 +7,8 @@ from time import time
 from duui_py.annotator import DuuiAnnotator
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.models import AnnotationMeta, DocumentModification, DuuiDocument, DuuiResult
-from duui_py.models.uima import Annotation
+from duui_py.models import AnnotatorMetaData, DocumentModification, V1RequestEnvelope, DuuiResult
+from duui_py.models.uima import Annotation, sofa_text_value
 
 TAXON_TYPE = "org.texttechnologylab.annotation.type.Taxon"
 BINOMIAL_PATTERN = re.compile(r"\\b([A-Z][a-z]{2,})\\s+([a-z]{2,})\\b")
@@ -18,14 +18,14 @@ class Taxon(Annotation):
     type: str = TAXON_TYPE
 
 
-class TaxoNERDAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
+class TaxoNERDAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
     config_path = "annotator_config.json"
 
     def codec(self) -> MsgPackLuaCodec:
         return MsgPackLuaCodec(self.config)
 
-    async def process(self, doc: DuuiDocument) -> DuuiResult:
-        text = doc.text or ""
+    async def process(self, doc: V1RequestEnvelope) -> DuuiResult:
+        text = sofa_text_value(doc.sofa) or ""
         linking = str(doc.parameters.get("linking") or "gbif_backbone")
         threshold = float(doc.parameters.get("threshold") or 0.7)
         model = str(doc.parameters.get("model") or "en_ner_eco_md")
@@ -50,7 +50,7 @@ class TaxoNERDAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
 
         return DuuiResult(
             annotations=annotations,
-            meta=AnnotationMeta(
+            meta=AnnotatorMetaData(
                 name=self.config.descriptor.name,
                 version=self.config.descriptor.version,
                 modelName=model,

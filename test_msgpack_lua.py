@@ -15,36 +15,34 @@ from duui_py.codecs.msgpack_lua.codec import (
     CHUNK_SOFA,
     CHUNK_START,
 )
-from duui_py.models import (
-    AnnotatorConfig,
-    AnnotatorDescriptor,
-    AnnotatorMeta,
-    DuuiResult,
-    InputSofaSpec,
-    InputDesc,
-    OutputSofaSpec,
-    OutputDesc,
-    SofaModeSpec,
-)
+from duui_py.models import AnnotatorConfig, AnnotatorDescriptor, AnnotatorMeta, DuuiResult, SoFaText
 from duui_py.models.config import ErrorSettings, FrameworkSettings, LimitSettings, LoggingSettings, ValidationSettings
 
 
 def _config() -> AnnotatorConfig:
-    descriptor = AnnotatorDescriptor(
-        name="test-annotator",
-        version="1.0.0",
-        input=InputDesc(
-            sofa=InputSofaSpec(
-                text=SofaModeSpec(mimeType="text/plain; charset=utf-8", language="x-unspecified")
-            ),
-            types=[],
-        ),
-        output=OutputDesc(
-            sofa=OutputSofaSpec(
-                text=SofaModeSpec(mimeType="text/plain; charset=utf-8", language="x-unspecified")
-            ),
-            types=[],
-        ),
+    descriptor = AnnotatorDescriptor.model_validate(
+        {
+            "name": "test-annotator",
+            "version": "1.0.0",
+            "input": {
+                "text": {
+                    "default": {
+                        "mimeType": "text/plain; charset=utf-8",
+                        "languages": ["x-unspecified"],
+                        "types": {},
+                    }
+                }
+            },
+            "output": {
+                "text": {
+                    "default": {
+                        "mimeType": "text/plain; charset=utf-8",
+                        "languages": ["x-unspecified"],
+                        "types": {},
+                    }
+                }
+            },
+        }
     )
     return AnnotatorConfig(
         meta=AnnotatorMeta(
@@ -95,6 +93,7 @@ def test_decode_request_requires_start_and_end() -> None:
 
     sofa_payload = msgpack.packb(
         {
+            "kind": "text",
             "mimeType": "text/plain; charset=utf-8",
             "language": "x-unspecified",
             "data": "hello",
@@ -112,7 +111,8 @@ def test_decode_request_requires_start_and_end() -> None:
     body.extend(struct.pack(">I", 0))
 
     doc = codec.decode_request(bytes(body))
-    assert doc.sofa.data == "hello"
+    assert isinstance(doc.sofa, SoFaText)
+    assert doc.sofa.text == "hello"
 
 
 def test_decode_request_rejects_unknown_chunk() -> None:
@@ -147,46 +147,3 @@ def test_lua_script_shape_is_valid_for_comm_layer() -> None:
     assert "function deserialize" in script
     assert "local descriptor = json.decode" in script
     assert "CHUNK_FEATURE_STRUCTURE" in script
-
-
-def test_legacy_descriptor_shape_is_normalized() -> None:
-    payload = {
-        "meta": {
-            "implementation_lang": "Python",
-            "meta": {},
-            "settings": {
-                "validation": {
-                    "strict_mime_validation": True,
-                    "strict_input_mime_check": True,
-                    "strict_output_mime_check": True,
-                    "strict_sofa_data_type_validation": True,
-                    "strict_descriptor_mime_pattern_validation": True,
-                },
-                "limits": {"request_max_bytes": None, "response_max_bytes": None},
-                "errors": {"fail_on_codec_error": True, "include_validation_details": True},
-                "logging": {"enabled": True},
-            },
-        },
-        "descriptor": {
-            "name": "legacy",
-            "version": "1.0.0",
-            "input": {
-                "domain": {
-                    "sofa": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"},
-                    "optional_types": ["uima.tcas.Annotation"],
-                },
-                "optional_inputs": [{"type": "uima.tcas.Annotation", "exclude": {}}],
-            },
-            "output": {
-                "sofa": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"},
-                "types": [],
-            },
-        },
-        "typesystem_xml_path": "/tmp/non-existing-typesystem.xml",
-        "parameters_schema": {},
-    }
-
-    config = AnnotatorConfig.model_validate(payload)
-    assert config.descriptor.input.sofa.text is not None
-    assert config.descriptor.input.sofa.text.mimeType == "text/plain; charset=utf-8"
-    assert "uima.tcas.Annotation" in config.descriptor.input.types

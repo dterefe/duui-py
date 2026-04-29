@@ -5,14 +5,8 @@ from time import time
 from duui_py.annotator import DuuiAnnotator
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.models import (
-    AnnotationMeta,
-    DocumentModification,
-    DuuiDocument,
-    DuuiResult,
-    FeatureStructureKeyRef,
-    FeatureStructureNode,
-)
+from duui_py.models import AnnotatorMetaData, DocumentModification, V1RequestEnvelope, DuuiResult
+from duui_py.models.uima import FeatureStructure, sofa_text_value
 
 TOKEN_TYPE = "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token"
 SENTENCE_TYPE = "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence"
@@ -20,7 +14,7 @@ ENTITY_TYPE = "org.texttechnologylab.annotation.semaf.isobase.Entity"
 SRLINK_TYPE = "org.texttechnologylab.annotation.semaf.semafsr.SrLink"
 
 
-class SRLAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
+class SRLAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
     config_path = "annotator_config.json"
 
     def codec(self) -> MsgPackLuaCodec:
@@ -30,8 +24,8 @@ class SRLAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
     def _is_type(value: str, target: str) -> bool:
         return value == target or value.endswith(f".{target.split('.')[-1]}")
 
-    async def process(self, doc: DuuiDocument) -> DuuiResult:
-        text = doc.text or ""
+    async def process(self, doc: V1RequestEnvelope) -> DuuiResult:
+        text = sofa_text_value(doc.sofa) or ""
         tokens = sorted(
             [fs for fs in doc.fs if fs.begin is not None and fs.end is not None and self._is_type(fs.type, TOKEN_TYPE)],
             key=lambda fs: (fs.begin or 0, fs.end or 0),
@@ -42,26 +36,19 @@ class SRLAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
         )
 
         if not tokens and text:
-            tokens = []
             start = 0
             for word in text.split():
                 idx = text.find(word, start)
                 if idx < 0:
                     continue
                 end = idx + len(word)
-                from duui_py.models import FsRec
-
-                tokens.append(FsRec(id=len(tokens) + 1, type=TOKEN_TYPE, begin=idx, end=end, features={}))
+                tokens.append(FeatureStructure(type=TOKEN_TYPE, begin=idx, end=end, features={}))
                 start = end
 
-        nodes: list[FeatureStructureNode] = []
-        token_keys: list[str] = []
-        for i, tok in enumerate(tokens):
-            key = f"entity-{i}"
-            token_keys.append(key)
-            nodes.append(
-                FeatureStructureNode(
-                    key=key,
+        fs_items: list[FeatureStructure] = []
+        for tok in tokens:
+            fs_items.append(
+                FeatureStructure(
                     type=ENTITY_TYPE,
                     begin=tok.begin,
                     end=tok.end,
@@ -72,9 +59,7 @@ class SRLAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
         max_links = int(doc.parameters.get("max_links_per_sentence") or 3)
 
         if not sentences and tokens:
-            from duui_py.models import FsRec
-
-            sentences = [FsRec(id=1, type=SENTENCE_TYPE, begin=tokens[0].begin, end=tokens[-1].end, features={})]
+            sentences = [FeatureStructure(type=SENTENCE_TYPE, begin=tokens[0].begin, end=tokens[-1].end, features={})]
 
         link_counter = 0
         for sent in sentences:
@@ -92,23 +77,24 @@ class SRLAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
 
             for role_i, ground_idx in enumerate(role_targets):
                 link_counter += 1
-                nodes.append(
-                    FeatureStructureNode(
-                        key=f"link-{link_counter}",
+                fs_items.append(
+                    FeatureStructure(
                         type=SRLINK_TYPE,
                         begin=tokens[predicate_idx].begin,
                         end=tokens[predicate_idx].end,
                         features={
-                            "figure": FeatureStructureKeyRef(key=token_keys[predicate_idx]),
-                            "ground": FeatureStructureKeyRef(key=token_keys[ground_idx]),
+                            "figureBegin": tokens[predicate_idx].begin,
+                            "figureEnd": tokens[predicate_idx].end,
+                            "groundBegin": tokens[ground_idx].begin,
+                            "groundEnd": tokens[ground_idx].end,
                             "rel_type": f"ARG{role_i}",
                         },
                     )
                 )
 
         return DuuiResult(
-            feature_structures=nodes,
-            meta=AnnotationMeta(
+            feature_structures=fs_items,
+            meta=AnnotatorMetaData(
                 name=self.config.descriptor.name,
                 version=self.config.descriptor.version,
                 modelName="heuristic-srl",

@@ -81,17 +81,24 @@ Start from `annotator_config.example.json`:
     "name": "my-annotator",
     "version": "0.0.0",
     "input": {
-      "sofa": {
-        "text": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" },
-        "annotation": []
+      "text": {
+        "default": {
+          "mimeType": "text/plain; charset=utf-8",
+          "languages": ["x-unspecified"],
+          "types": {}
+        }
       },
-      "types": []
+      "types": {}
     },
     "output": {
-      "sofa": {
-        "text": { "mimeType": "text/plain; charset=utf-8", "language": "x-unspecified" }
+      "text": {
+        "default": {
+          "mimeType": "text/plain; charset=utf-8",
+          "languages": ["x-unspecified"],
+          "types": {}
+        }
       },
-      "types": []
+      "types": {}
     }
   },
   "typesystem_xml_path": "TypeSystem.xml",
@@ -106,7 +113,7 @@ from __future__ import annotations
 
 from duui_py.annotator import DuuiAnnotator
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.models import DuuiDocument, DuuiResult
+from duui_py.models import V1RequestEnvelope, DuuiResult
 from duui_py.logging import (
     configure_logger, 
     StreamSink, 
@@ -119,7 +126,7 @@ from duui_py.logging import (
 from duui_py.logging.errors import log_errors
 
 
-class MyAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
+class MyAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
     config_path = "annotator_config.example.json"
     
     def __init__(self, config_path: str | None = None, config: dict | None = None):
@@ -143,7 +150,7 @@ class MyAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
         return MsgPackLuaCodec(self.config)
     
     @log_errors(log_level="ERROR", recovery_suggestion="Check input format")
-    async def process(self, doc: DuuiDocument) -> DuuiResult:
+    async def process(self, doc: V1RequestEnvelope) -> DuuiResult:
         # Set request context from event-context parameter
         event_context_param = self.request.headers.get("x-event-context", "")
         context = create_event_context_from_request(
@@ -168,7 +175,7 @@ class MyAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
         
         return result
     
-    async def _process_document(self, doc: DuuiDocument) -> DuuiResult:
+    async def _process_document(self, doc: V1RequestEnvelope) -> DuuiResult:
         # Implement your annotation logic
         raise NotImplementedError
 ```

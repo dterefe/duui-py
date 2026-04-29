@@ -1,30 +1,31 @@
 from __future__ import annotations
 
-import inspect
 from collections.abc import AsyncIterable, AsyncIterator
 from enum import Enum
+import inspect
 
 from fastapi import FastAPI, HTTPException, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 from typing import Any, TypeVar, cast
 
-from duui_py.annotator import DuuiAnnotator, V1Process, V2Process, V2ProcessChunks
+from duui_py.annotator import DuuiAnnotator, V1AsyncProcess, V1Payload, V1Process
 from duui_py.codecs.base import Codec, StreamingRequestDecoder, StreamingResponseEncoder
 from duui_py.logging import (
-    configure_logger,
-    configure_stream_manager,
-    configure_metric_collector,
-    get_event_logger,
-    create_event_context_from_request,
-    set_event_context,
     clear_event_context,
-    EventContext,
+    configure_logger,
+    configure_metric_collector,
+    configure_stream_manager,
+    create_event_context_from_request,
+    get_event_logger,
+    set_event_context,
+    ConsoleSink,
     EventSink,
     StreamSink,
-    ConsoleSink,
 )
 from duui_py.logging.streaming import router as events_router
-from duui_py.models import AnnotatorConfig, DuuiDocument, DuuiResult
+from duui_py.models import AnnotatorConfig, V1RequestEnvelope, DuuiResult
+from duui_py.models.uima import FeatureStructure
+from duui_py.models.uima import SoFa, SoFaAnnotationSpans, SoFaBytes, SoFaText, SoFaURI, sofa_kind
 from duui_py.settings import set_settings_once
 from duui_py.utils.mime import matches_mime_type
 
@@ -32,25 +33,19 @@ RequestT = TypeVar("RequestT")
 ResponseT = TypeVar("ResponseT")
 
 
+class ProcessingMode(str, Enum):
+    NORMAL = "normal"
+    STREAMING = "streaming"
+
+
 def _validate_lua_communication_layer(codec: Codec[Any, Any]) -> None:
     content = codec.communication_layer_content()
-    format_value = str(content.get("format", "")).lower()
-    spec_value = content.get("spec")
-    if format_value != "lua" or not isinstance(spec_value, str) or not spec_value.strip():
-        raise RuntimeError(
-            "Invalid codec communication layer: only Lua script communication layers are supported "
-            "(expected {'format': 'lua', 'spec': '<non-empty string>'})."
-        )
+    if str(content.get("format", "")).lower() != "lua" or not str(content.get("spec", "")).strip():
+        raise RuntimeError("Invalid codec communication layer: expected non-empty Lua script")
 
 
 def _is_async_iterable(value: object) -> bool:
     return hasattr(value, "__aiter__")
-
-
-async def _maybe_await(value: object) -> object:
-    if inspect.isawaitable(value):
-        return await value
-    return value
 
 
 def _merge_results(base: DuuiResult, chunk: DuuiResult) -> DuuiResult:
@@ -69,11 +64,11 @@ def _merge_results(base: DuuiResult, chunk: DuuiResult) -> DuuiResult:
     return base
 
 
-def _merge_documents(base: DuuiDocument, chunk: DuuiDocument) -> DuuiDocument:
+def _merge_documents(base: V1RequestEnvelope, chunk: V1RequestEnvelope) -> V1RequestEnvelope:
     if chunk.parameters:
-        merged_parameters = dict(base.parameters)
-        merged_parameters.update(chunk.parameters)
-        base.parameters = merged_parameters
+        merged = dict(base.parameters)
+        merged.update(chunk.parameters)
+        base.parameters = merged
     if chunk.view:
         base.view = chunk.view
     if chunk.sofa is not None:
@@ -83,17 +78,144 @@ def _merge_documents(base: DuuiDocument, chunk: DuuiDocument) -> DuuiDocument:
     return base
 
 
-class ProcessingMode(str, Enum):
-    NORMAL = "normal"
-    STREAMING = "streaming"
-
-
-def _determine_processing_mode(codec: Codec[Any, Any], annotator: DuuiAnnotator[Any, Any]) -> ProcessingMode:
-    del annotator
-    codec_streaming = isinstance(codec, StreamingRequestDecoder) and isinstance(codec, StreamingResponseEncoder)
-    if codec_streaming:
+def _determine_processing_mode(codec: Codec[Any, Any]) -> ProcessingMode:
+    if isinstance(codec, StreamingRequestDecoder) and isinstance(codec, StreamingResponseEncoder):
         return ProcessingMode.STREAMING
     return ProcessingMode.NORMAL
+
+
+def _iter_descriptor_mimes(io_desc: Any) -> list[str]:
+    out: list[str] = []
+    for domain in ("text", "bytes", "uri", "annotation"):
+        spec = getattr(io_desc, domain, None)
+        if spec is None:
+            continue
+        for _, alt in spec.iter_alternatives():
+            if alt.mimeType:
+                out.append(alt.mimeType)
+    return out
+
+
+def _resolve_domain_alias_for_sofa(io_desc: Any, sofa: SoFa) -> tuple[str, str, Any]:
+    kind = sofa_kind(sofa)
+    domain = "annotation" if kind == "annotation_spans" else kind
+
+    mode = ""
+    if isinstance(sofa, SoFaAnnotationSpans):
+        mode = "annotation_spans"
+
+    if domain == "annotation" or mode == "annotation_spans":
+        span_alias = "default"
+        if hasattr(sofa, "annotationType") and getattr(sofa, "annotationType", ""):
+            span_alias = "default"
+        return domain, span_alias, io_desc.resolve(domain, span_alias)
+
+    spec = getattr(io_desc, domain, None)
+    if spec is None:
+        raise HTTPException(status_code=415, detail=f"descriptor domain '{domain}' not configured")
+
+    actual = sofa.mimeType
+    for alias, alt in spec.iter_alternatives():
+        if alt.mimeType and matches_mime_type(alt.mimeType, actual):
+            return domain, alias, io_desc.resolve(domain, alias)
+
+    raise HTTPException(status_code=415, detail=f"unsupported sofa.mimeType: {actual}")
+
+
+def _find_fs_for_type(fs_items: list[FeatureStructure], type_name: str) -> list[FeatureStructure]:
+    suffix = type_name.split(".")[-1]
+    return [item for item in fs_items if item.type == type_name or item.type.endswith(f".{suffix}")]
+
+
+def _build_feature_structure_map(
+    resolved_types: dict[str, list[str]],
+    fs_items: list[FeatureStructure],
+    parameters: dict[str, Any],
+) -> dict[str, list[FeatureStructure]]:
+    out: dict[str, list[FeatureStructure]] = {}
+    try_fallback = bool(parameters.get("recovery.try_fallback", False))
+
+    for type_alias, candidates in resolved_types.items():
+        if not candidates:
+            raise HTTPException(status_code=422, detail=f"type alias '{type_alias}' has no candidates")
+
+        pref_key = f"pref.{type_alias}"
+        preferred = parameters.get(pref_key)
+        chosen: list[FeatureStructure] | None = None
+
+        if isinstance(preferred, str):
+            if preferred not in candidates:
+                raise HTTPException(status_code=422, detail=f"invalid preferred type for '{type_alias}': {preferred}")
+            selected = _find_fs_for_type(fs_items, preferred)
+            if selected:
+                chosen = selected
+            elif not try_fallback:
+                raise HTTPException(status_code=422, detail=f"preferred type '{preferred}' for '{type_alias}' not present")
+
+        if chosen is None:
+            for candidate in candidates:
+                selected = _find_fs_for_type(fs_items, candidate)
+                if selected:
+                    chosen = selected
+                    break
+
+        if chosen is None:
+            raise HTTPException(status_code=422, detail=f"missing required feature structures for '{type_alias}'")
+
+        out[type_alias] = chosen
+
+    return out
+
+
+async def _invoke_v1(
+    annotator: V1Process[Any, DuuiResult],
+    doc: V1RequestEnvelope,
+    descriptor_io: Any,
+) -> AsyncIterator[DuuiResult]:
+    _, _, resolved = _resolve_domain_alias_for_sofa(descriptor_io, doc.sofa)
+    payload_cls = cast(type[V1Payload], getattr(annotator, "payload_model", V1Payload))
+    fs_map = _build_feature_structure_map(resolved.types, list(doc.fs), dict(doc.parameters))
+    payload = payload_cls.model_validate({"view": doc.view, "feature_structures": fs_map})
+
+    kind = sofa_kind(doc.sofa)
+    if kind == "text":
+        method = getattr(annotator, "process_text", None)
+    elif kind == "bytes":
+        method = getattr(annotator, "process_bytes", None)
+    elif kind == "uri":
+        method = getattr(annotator, "process_uri", None)
+    else:
+        method = getattr(annotator, "process_spans", None)
+
+    if method is None:
+        raise HTTPException(status_code=422, detail=f"missing processor for sofa subtype '{kind}'")
+
+    returned_obj = method(doc.sofa, payload, dict(doc.parameters))
+    if isinstance(annotator, V1AsyncProcess):
+        if inspect.isawaitable(returned_obj):
+            returned_obj = await cast(Any, returned_obj)
+        if returned_obj is None:
+            return
+        async for part in cast(AsyncIterable[DuuiResult], returned_obj):
+            yield part
+        return
+
+    returned = returned_obj
+    if inspect.isawaitable(returned):
+        returned = await cast(Any, returned)
+    if returned is None:
+        yield DuuiResult()
+    else:
+        yield cast(DuuiResult, returned)
+
+
+def _validate_output_mime(cfg: AnnotatorConfig, result: DuuiResult) -> None:
+    if result.sofa is None:
+        return
+    actual = result.sofa.mimeType
+    output_mimes = _iter_descriptor_mimes(cfg.descriptor.output)
+    if output_mimes and not any(matches_mime_type(pattern, actual) for pattern in output_mimes):
+        raise HTTPException(status_code=500, detail=f"annotator returned unsupported output sofa.mimeType: {actual}")
 
 
 def create_app(
@@ -105,37 +227,31 @@ def create_app(
     annotator = annotator_cls(config_path=config_path, config=config)
     cfg = annotator.config
     set_settings_once(cfg.meta.settings)
+
     settings = cfg.meta.settings
-    validation = settings.validation
     limits = settings.limits
     errors = settings.errors
-    logging_settings = settings.logging
+    validation = settings.validation
     codec: Codec[RequestT, ResponseT] = annotator.codec()
     _validate_lua_communication_layer(codec)
-    process_mode = _determine_processing_mode(codec, annotator)
+    process_mode = _determine_processing_mode(codec)
 
     app = FastAPI(title=cfg.descriptor.name, version=cfg.descriptor.version)
     typesystem_xml = open(cfg.typesystem_xml_path, "rb").read()
     logger = None
 
-    # Define the core endpoints first
     @app.get("/v1/typesystem")
     def get_typesystem() -> Response:
         return Response(content=typesystem_xml, media_type="application/xml")
 
     @app.get("/v1/communication_layer")
-    def get_communication_layer() -> JSONResponse:
-        return JSONResponse(content=codec.communication_layer_content(), media_type="application/json")
+    def get_communication_layer() -> Response:
+        return Response(content=str(codec.communication_layer_content()["spec"]), media_type="text/plain; charset=utf-8")
 
     @app.get("/v1/details/input_output")
     def get_input_output() -> dict[str, Any]:
         d = cfg.descriptor
-        return {
-            "name": d.name,
-            "version": d.version,
-            "input": d.input.model_dump(),
-            "output": d.output.model_dump(),
-        }
+        return {"name": d.name, "version": d.version, "input": d.input.model_dump(), "output": d.output.model_dump()}
 
     @app.get("/v1/documentation")
     def get_documentation() -> dict[str, Any]:
@@ -154,6 +270,23 @@ def create_app(
         if logger is not None:
             await logger.info(f"Process request started ({process_mode.value})")
 
+        async def _process_doc(doc: V1RequestEnvelope) -> DuuiResult:
+            if validation.strict_mime_validation and validation.strict_input_mime_check:
+                _resolve_domain_alias_for_sofa(cfg.descriptor.input, doc.sofa)
+
+            if isinstance(annotator, V1Process):
+                merged = DuuiResult()
+                async for item in _invoke_v1(cast(V1Process[Any, DuuiResult], annotator), doc, cfg.descriptor.input):
+                    _merge_results(merged, item)
+                _validate_output_mime(cfg, merged)
+                return merged
+
+            result = await annotator.process(cast(RequestT, doc))
+            if isinstance(result, DuuiResult):
+                _validate_output_mime(cfg, result)
+                return result
+            raise HTTPException(status_code=500, detail="non-V1 annotator returned unsupported response type")
+
         if process_mode == ProcessingMode.STREAMING:
             async def limited_body_stream() -> AsyncIterator[bytes]:
                 total = 0
@@ -166,125 +299,74 @@ def create_app(
                     yield chunk
 
             try:
-                decoded_input = await codec.decode_request_stream(limited_body_stream())
+                decoded_input = await cast(StreamingRequestDecoder[RequestT], codec).decode_request_stream(limited_body_stream())
             except Exception as exc:  # noqa: BLE001
                 detail = f"request decode failed: {exc}" if errors.include_validation_details else "request decode failed"
-                if errors.fail_on_codec_error:
-                    raise HTTPException(status_code=400, detail=detail) from exc
-                raise HTTPException(status_code=422, detail=detail) from exc
+                raise HTTPException(status_code=400 if errors.fail_on_codec_error else 422, detail=detail) from exc
 
-            def validate_input_doc(doc: RequestT) -> RequestT:
-                if isinstance(doc, DuuiDocument):
-                    expected = cfg.descriptor.input.default_mime_type()
-                    if (
-                        validation.strict_mime_validation
-                        and validation.strict_input_mime_check
-                        and not matches_mime_type(expected, doc.sofa.mimeType)
-                    ):
-                        raise HTTPException(
-                            status_code=415,
-                            detail=(
-                                f"unsupported sofa.mimeType: {doc.sofa.mimeType} (expected {expected})"
-                                if errors.include_validation_details
-                                else "unsupported sofa.mimeType"
-                            ),
-                        )
-                return doc
-
-            if _is_async_iterable(decoded_input):
-                async def validated_input_stream() -> AsyncIterator[RequestT]:
-                    async for doc in decoded_input:  # type: ignore[assignment]
-                        yield validate_input_doc(doc)
-                handoff_input: RequestT | AsyncIterable[RequestT] = validated_input_stream()
-            else:
-                handoff_input = validate_input_doc(decoded_input)  # type: ignore[arg-type]
-
-            async def iter_input_documents() -> AsyncIterator[DuuiDocument]:
-                if _is_async_iterable(handoff_input):
-                    async for item in cast(AsyncIterable[Any], handoff_input):
-                        if not isinstance(item, DuuiDocument):
-                            raise HTTPException(status_code=500, detail="streaming mode expects DuuiDocument input")
+            async def iter_docs() -> AsyncIterator[V1RequestEnvelope]:
+                if _is_async_iterable(decoded_input):
+                    async for item in cast(AsyncIterable[Any], decoded_input):
+                        if not isinstance(item, V1RequestEnvelope):
+                            raise HTTPException(status_code=500, detail="streaming mode expects V1RequestEnvelope input")
                         yield item
                     return
-                item = cast(Any, handoff_input)
-                if not isinstance(item, DuuiDocument):
-                    raise HTTPException(status_code=500, detail="streaming mode expects DuuiDocument input")
+                item = cast(Any, decoded_input)
+                if not isinstance(item, V1RequestEnvelope):
+                    raise HTTPException(status_code=500, detail="streaming mode expects V1RequestEnvelope input")
                 yield item
 
-            async def assemble_full_input() -> DuuiDocument:
-                base: DuuiDocument | None = None
-                async for item in iter_input_documents():
-                    if base is None:
-                        base = DuuiDocument(
-                            parameters=dict(item.parameters),
-                            view=item.view,
-                            sofa=item.sofa,
-                            fs=list(item.fs),
-                        )
-                    else:
-                        _merge_documents(base, item)
-                if base is None:
-                    raise HTTPException(status_code=400, detail="empty streaming input")
-                return base
-
-            async def processed_output_stream() -> AsyncIterator[ResponseT]:
-                if isinstance(annotator, V2ProcessChunks):
-                    batch_size = max(1, int(getattr(annotator, "batch_size", 1)))
-                    batch: list[DuuiDocument] = []
+            async def run_stream() -> AsyncIterator[ResponseT]:
+                if isinstance(annotator, V1AsyncProcess):
                     params: dict[str, Any] = {}
-                    async for item in iter_input_documents():
+                    batch_mode = "await_full_input"
+                    batch_n = 1
+                    pending: list[V1RequestEnvelope] = []
+
+                    async for item in iter_docs():
                         if item.parameters:
                             params = dict(item.parameters)
-                        batch.append(item)
-                        if len(batch) >= batch_size:
-                            async for out in annotator.v2_process_chunks(batch, params):
-                                yield cast(ResponseT, out)
-                            batch = []
-                    if batch:
-                        async for out in annotator.v2_process_chunks(batch, params):
-                            yield cast(ResponseT, out)
+                            batch_mode = str(params.get("batch.mode") or "await_full_input")
+                            try:
+                                batch_n = max(1, int(params.get("batch.n") or 1))
+                            except Exception:
+                                batch_n = 1
+
+                        pending.append(item)
+                        if batch_mode == "every_n_spans" and len(pending) >= batch_n:
+                            merged = pending[0]
+                            for extra in pending[1:]:
+                                _merge_documents(merged, extra)
+                            yield cast(ResponseT, await _process_doc(merged))
+                            pending = []
+
+                    if pending:
+                        merged = pending[0]
+                        for extra in pending[1:]:
+                            _merge_documents(merged, extra)
+                        yield cast(ResponseT, await _process_doc(merged))
                     return
 
-                full_input = await assemble_full_input()
-                if isinstance(annotator, V2Process):
-                    async for out in annotator.v2_process(full_input, full_input.parameters):
-                        yield cast(ResponseT, out)
-                    return
-                if isinstance(annotator, V1Process):
-                    v1_result = DuuiResult()
-                    returned = await annotator.v1_process(full_input, full_input.parameters, v1_result)
-                    yield cast(ResponseT, returned if returned is not None else v1_result)
-                    return
+                base: V1RequestEnvelope | None = None
+                async for item in iter_docs():
+                    if base is None:
+                        base = V1RequestEnvelope(parameters=dict(item.parameters), view=item.view, sofa=item.sofa, fs=list(item.fs))
+                    else:
+                        _merge_documents(base, item)
 
-                result = await annotator.process(cast(RequestT, full_input))
-                yield cast(ResponseT, result)
+                if base is None:
+                    raise HTTPException(status_code=400, detail="empty streaming input")
+                yield cast(ResponseT, await _process_doc(base))
 
             async def validated_result_stream() -> AsyncIterator[ResponseT]:
-                expected = cfg.descriptor.output.default_mime_type()
-                async for result in processed_output_stream():
-                    if isinstance(result, DuuiResult) and result.sofa is not None:
-                        if (
-                            validation.strict_mime_validation
-                            and validation.strict_output_mime_check
-                            and not matches_mime_type(expected, result.sofa.mimeType)
-                        ):
-                            raise HTTPException(
-                                status_code=500,
-                                detail=(
-                                    f"annotator returned unsupported output sofa.mimeType: {result.sofa.mimeType} (expected {expected})"
-                                    if errors.include_validation_details
-                                    else "annotator returned unsupported output sofa.mimeType"
-                                ),
-                            )
+                async for result in run_stream():
                     yield result
 
             try:
-                encoded_stream = await codec.encode_response_stream(validated_result_stream())
+                encoded_stream = await cast(StreamingResponseEncoder[ResponseT], codec).encode_response_stream(validated_result_stream())
             except Exception as exc:  # noqa: BLE001
                 detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
-                if errors.fail_on_codec_error:
-                    raise HTTPException(status_code=500, detail=detail) from exc
-                raise HTTPException(status_code=422, detail=detail) from exc
+                raise HTTPException(status_code=500 if errors.fail_on_codec_error else 422, detail=detail) from exc
 
             async def limited_response_stream() -> AsyncIterator[bytes]:
                 total = 0
@@ -304,61 +386,23 @@ def create_app(
             raise HTTPException(status_code=413, detail="request payload too large")
 
         try:
-            doc: RequestT = codec.decode_request(body)
+            doc = codec.decode_request(body)
         except Exception as exc:  # noqa: BLE001
             detail = f"request decode failed: {exc}" if errors.include_validation_details else "request decode failed"
-            if errors.fail_on_codec_error:
-                raise HTTPException(status_code=400, detail=detail) from exc
-            raise HTTPException(status_code=422, detail=detail) from exc
+            raise HTTPException(status_code=400 if errors.fail_on_codec_error else 422, detail=detail) from exc
 
-        if isinstance(doc, DuuiDocument):
-            expected = cfg.descriptor.input.default_mime_type()
-            if validation.strict_mime_validation and validation.strict_input_mime_check and not matches_mime_type(expected, doc.sofa.mimeType):
-                raise HTTPException(
-                    status_code=415,
-                    detail=(
-                        f"unsupported sofa.mimeType: {doc.sofa.mimeType} (expected {expected})"
-                        if errors.include_validation_details
-                        else "unsupported sofa.mimeType"
-                    ),
-                )
+        if not isinstance(doc, V1RequestEnvelope):
+            result = await annotator.process(cast(RequestT, doc))
+            response_body = codec.encode_response(cast(ResponseT, result))
+            return Response(content=response_body, media_type=codec.response_media_type)
+
+        result = await _process_doc(doc)
 
         try:
-            if isinstance(doc, DuuiDocument) and isinstance(annotator, V1Process):
-                v1_result = DuuiResult()
-                returned = await annotator.v1_process(doc, doc.parameters, v1_result)
-                result = cast(ResponseT, returned if returned is not None else v1_result)
-            elif isinstance(doc, DuuiDocument) and isinstance(annotator, V2Process):
-                merged = DuuiResult()
-                async for partial in annotator.v2_process(doc, doc.parameters):
-                    _merge_results(merged, partial)
-                result = cast(ResponseT, merged)
-            else:
-                result = await annotator.process(doc)
-        except Exception as exc:  # noqa: BLE001
-            if logger is not None:
-                await logger.error(f"Process request failed with unexpected error: {exc}")
-            raise
-
-        if isinstance(result, DuuiResult) and result.sofa is not None:
-            expected = cfg.descriptor.output.default_mime_type()
-            if validation.strict_mime_validation and validation.strict_output_mime_check and not matches_mime_type(expected, result.sofa.mimeType):
-                raise HTTPException(
-                    status_code=500,
-                    detail=(
-                        f"annotator returned unsupported output sofa.mimeType: {result.sofa.mimeType} (expected {expected})"
-                        if errors.include_validation_details
-                        else "annotator returned unsupported output sofa.mimeType"
-                    ),
-                )
-
-        try:
-            response_body = codec.encode_response(result)
+            response_body = codec.encode_response(cast(ResponseT, result))
         except Exception as exc:  # noqa: BLE001
             detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
-            if errors.fail_on_codec_error:
-                raise HTTPException(status_code=500, detail=detail) from exc
-            raise HTTPException(status_code=422, detail=detail) from exc
+            raise HTTPException(status_code=500 if errors.fail_on_codec_error else 422, detail=detail) from exc
 
         if limits.response_max_bytes is not None and len(response_body) > limits.response_max_bytes:
             raise HTTPException(status_code=500, detail="response payload too large")
@@ -368,33 +412,21 @@ def create_app(
             await logger.info("Process request completed successfully")
         return response
 
-    # Configure logging if enabled
+    logging_settings = settings.logging
     if logging_settings.enabled:
-        # Configure stream manager
-        stream_manager = configure_stream_manager(
-            default_ttl_minutes=logging_settings.stream_timeout_minutes
-        )
-        
-        # Create sinks - use typing.cast to help type checker
-        from typing import List as TypingList
-        sinks: TypingList[EventSink] = [cast(EventSink, StreamSink(stream_manager))]
-        # Add console sink for debugging in development
+        stream_manager = configure_stream_manager(default_ttl_minutes=logging_settings.stream_timeout_minutes)
+        sinks: list[EventSink] = [cast(EventSink, StreamSink(stream_manager))]
         import os
         if os.environ.get("DUUI_DEBUG_LOGGING"):
             sinks.append(cast(EventSink, ConsoleSink()))
-        
-        # Configure logger
+
         configure_logger(
             sinks=sinks,
-            default_context={
-                "annotator_name": cfg.descriptor.name,
-                "annotator_version": cfg.descriptor.version,
-            },
+            default_context={"annotator_name": cfg.descriptor.name, "annotator_version": cfg.descriptor.version},
             annotator_descriptor=cfg.descriptor,
             start_background_worker=True,
         )
-        
-        # Configure metric collector
+
         configure_metric_collector(
             collection_interval_seconds=logging_settings.metrics_collection_interval_seconds,
             include_process_metrics=logging_settings.include_process_metrics,
@@ -403,33 +435,22 @@ def create_app(
             include_network_metrics=logging_settings.include_network_metrics,
             start_immediately=True,
         )
-        
-        # Add event streaming endpoints
+
         app.include_router(events_router)
-        
-        # Add middleware for event context
+
         @app.middleware("http")
         async def event_context_middleware(request: Request, call_next):
-            # Extract event-context query parameter
             event_context_param = request.query_params.get("event-context")
-            
-            # Create event context
             event_context = create_event_context_from_request(
                 event_context_param=event_context_param,
                 request_id=request.headers.get("x-request-id"),
             )
-            
-            # Set context for this request
             set_event_context(event_context)
-            
             try:
-                response = await call_next(request)
-                return response
+                return await call_next(request)
             finally:
-                # Clear context after request
                 clear_event_context()
-        
-        # Set logger for core endpoint lifecycle messages
+
         logger = get_event_logger()
 
     return app

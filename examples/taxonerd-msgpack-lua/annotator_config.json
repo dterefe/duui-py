@@ -1,7 +1,9 @@
 {
   "meta": {
     "implementation_lang": "Python",
-    "meta": {"example": "duui-taxonerd migration"},
+    "meta": {
+      "example": "duui-taxonerd migration"
+    },
     "settings": {
       "validation": {
         "strict_mime_validation": true,
@@ -10,8 +12,14 @@
         "strict_sofa_data_type_validation": true,
         "strict_descriptor_mime_pattern_validation": true
       },
-      "limits": {"request_max_bytes": null, "response_max_bytes": null},
-      "errors": {"fail_on_codec_error": true, "include_validation_details": true},
+      "limits": {
+        "request_max_bytes": null,
+        "response_max_bytes": null
+      },
+      "errors": {
+        "fail_on_codec_error": true,
+        "include_validation_details": true
+      },
       "logging": {
         "enabled": true,
         "stream_timeout_minutes": 5,
@@ -24,21 +32,50 @@
     "name": "taxonerd-msgpack-lua",
     "version": "1.0.0",
     "input": {
-      "sofa": {
-        "text": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"},
-        "annotation": []
-      },
-      "types": []
+      "types": {},
+      "text": {
+        "default": {
+          "types": {},
+          "mimeType": "text/plain; charset=utf-8",
+          "languages": [
+            "x-unspecified"
+          ]
+        }
+      }
     },
     "output": {
-      "sofa": {"text": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"}},
-      "types": ["org.texttechnologylab.annotation.type.Taxon"]
+      "types": {
+        "Taxon": [
+          "org.texttechnologylab.annotation.type.Taxon"
+        ]
+      },
+      "text": {
+        "default": {
+          "types": {},
+          "mimeType": "text/plain; charset=utf-8",
+          "languages": [
+            "x-unspecified"
+          ]
+        }
+      }
     }
   },
   "typesystem_xml_path": "TypeSystemTaxoNERD.xml",
   "parameters_schema": {
-    "linking": {"type": "string", "default": "gbif_backbone", "description": "TaxoNERD linker name."},
-    "threshold": {"type": "number", "default": 0.7, "description": "TaxoNERD threshold."},
-    "model": {"type": "string", "default": "en_ner_eco_md", "description": "TaxoNERD model."}
+    "linking": {
+      "type": "string",
+      "default": "gbif_backbone",
+      "description": "TaxoNERD linker name."
+    },
+    "threshold": {
+      "type": "number",
+      "default": 0.7,
+      "description": "TaxoNERD threshold."
+    },
+    "model": {
+      "type": "string",
+      "default": "en_ner_eco_md",
+      "description": "TaxoNERD model."
+    }
   }
 }

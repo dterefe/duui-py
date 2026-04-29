@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from duui_py.annotator import DuuiAnnotator
 from duui_py.codecs.lua_custom import LuaCustomCodec
-from duui_py.models import DuuiDocument, DuuiResult, AnnotationMeta, DocumentModification
+from duui_py.models import V1RequestEnvelope, DuuiResult, AnnotatorMetaData, DocumentModification
 from duui_py.models.uima import Sentence as UimaSentence, Token as UimaToken, Lemma as UimaLemma, POS as UimaPOS, NamedEntity as UimaNamedEntity
 from duui_py.logging import (
     configure_logger,
@@ -106,7 +106,7 @@ class SpacyResponse(BaseModel):
     dependencies: List[SpacyDependency] = Field(default_factory=list)
     entities: List[SpacyEntity] = Field(default_factory=list)
     noun_chunks: List[Span] = Field(default_factory=list)
-    meta: Optional[AnnotationMeta] = None
+    meta: Optional[AnnotatorMetaData] = None
     modification_meta: Optional[DocumentModification] = None
     is_pretokenized: bool = False
 
@@ -236,7 +236,7 @@ class SpacyAnnotator(DuuiAnnotator[SpacyRequest, SpacyResponse]):
         spacy_meta = nlp.meta
         
         # Create metadata
-        meta = AnnotationMeta(
+        meta = AnnotatorMetaData(
             name=self.config.descriptor.name,
             version=self.config.descriptor.version,
             modelName=spacy_meta.get("name", model_name),

@@ -9,17 +9,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
 from duui_py.codecs.msgpack_lua.codec import CHUNK_END, CHUNK_ERROR, CHUNK_START
-from duui_py.models import (
-    AnnotatorConfig,
-    AnnotatorDescriptor,
-    AnnotatorMeta,
-    DuuiResult,
-    InputSofaSpec,
-    InputDesc,
-    OutputSofaSpec,
-    OutputDesc,
-    SofaModeSpec,
-)
+from duui_py.models import AnnotatorConfig, AnnotatorDescriptor, AnnotatorMeta, DuuiResult
 from duui_py.models.config import ErrorSettings, FrameworkSettings, LimitSettings, LoggingSettings, ValidationSettings
 
 
@@ -50,21 +40,29 @@ def make_codec() -> MsgPackLuaCodec:
             ),
         ),
         description="simple-test",
-        descriptor=AnnotatorDescriptor(
-            name="simple",
-            version="1.0.0",
-            input=InputDesc(
-                sofa=InputSofaSpec(
-                    text=SofaModeSpec(mimeType="text/plain; charset=utf-8", language="x-unspecified")
-                ),
-                types=[],
-            ),
-            output=OutputDesc(
-                sofa=OutputSofaSpec(
-                    text=SofaModeSpec(mimeType="text/plain; charset=utf-8", language="x-unspecified")
-                ),
-                types=[],
-            ),
+        descriptor=AnnotatorDescriptor.model_validate(
+            {
+                "name": "simple",
+                "version": "1.0.0",
+                "input": {
+                    "text": {
+                        "default": {
+                            "mimeType": "text/plain; charset=utf-8",
+                            "languages": ["x-unspecified"],
+                            "types": {},
+                        }
+                    }
+                },
+                "output": {
+                    "text": {
+                        "default": {
+                            "mimeType": "text/plain; charset=utf-8",
+                            "languages": ["x-unspecified"],
+                            "types": {},
+                        }
+                    }
+                },
+            }
         ),
         typesystem_xml_path="/tmp/no-typesystem.xml",
         parameters_schema={},

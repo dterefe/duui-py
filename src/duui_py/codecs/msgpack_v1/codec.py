@@ -7,15 +7,13 @@ from pydantic import BaseModel, Field
 
 from duui_py.codecs.base import Codec
 from duui_py.models import (
-    AnnotationMeta,
+    AnnotatorMetaData,
     DocumentModification,
-    DuuiDocument,
+    V1RequestEnvelope,
     DuuiResult,
-    FsRec,
     SoFa,
 )
-from duui_py.models.fs_builder import build_feature_structures
-from duui_py.models.uima import normalize_uima_value
+from duui_py.models.uima import FeatureStructure, normalize_uima_value
 
 MsgpackScalar: TypeAlias = None | bool | int | float | str | bytes
 MsgpackValue: TypeAlias = MsgpackScalar | list["MsgpackValue"] | dict[str, "MsgpackValue"]
@@ -26,13 +24,13 @@ class WireEnvelopeIn(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
     view: str = ""
     sofa: SoFa
-    fs: list[FsRec] = Field(default_factory=list)
+    fs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WireEnvelopeOut(BaseModel):
     sofa: Optional[SoFa] = None
-    fs: list[FsRec] = Field(default_factory=list)
-    meta: Optional[AnnotationMeta] = None
+    fs: list[dict[str, Any]] = Field(default_factory=list)
+    meta: Optional[AnnotatorMetaData] = None
     modification_meta: Optional[DocumentModification] = None
     errors: list[str] = Field(default_factory=list)
 
@@ -48,19 +46,26 @@ def encode_msgpack(obj: MsgpackObject) -> bytes:
     return cast(bytes, msgpack.packb(obj, use_bin_type=True))
 
 
-def wire_to_document(env: WireEnvelopeIn) -> DuuiDocument:
-    normalized_fs = [
-        FsRec(
-            id=item.id,
-            ref=item.ref,
-            type=item.type,
-            begin=item.begin,
-            end=item.end,
-            features={k: normalize_uima_value(v) for k, v in item.features.items()},
+def wire_to_document(env: WireEnvelopeIn) -> V1RequestEnvelope:
+    normalized_fs: list[FeatureStructure] = []
+    for item in env.fs:
+        if not isinstance(item, dict):
+            continue
+        normalized_fs.append(
+            FeatureStructure.model_validate(
+                {
+                    "ref": item.get("ref"),
+                    "type": str(item.get("type", "")),
+                    "begin": item.get("begin"),
+                    "end": item.get("end"),
+                    "features": {
+                        str(k): normalize_uima_value(v)
+                        for k, v in cast(dict[str, Any], item.get("features", {})).items()
+                    },
+                }
+            )
         )
-        for item in env.fs
-    ]
-    return DuuiDocument(
+    return V1RequestEnvelope(
         parameters=env.parameters,
         view=env.view,
         sofa=env.sofa,
@@ -70,28 +75,35 @@ def wire_to_document(env: WireEnvelopeIn) -> DuuiDocument:
 
 def result_to_wire(result: DuuiResult) -> WireEnvelopeOut:
     if result.feature_structures:
+        fs_payload = [
+            {
+                "ref": fs.ref,
+                "type": fs.type,
+                "begin": fs.begin,
+                "end": fs.end,
+                "features": {k: normalize_uima_value(v) for k, v in fs.feature_map().items()},
+            }
+            for fs in result.feature_structures
+        ]
         return WireEnvelopeOut(
             sofa=result.sofa,
-            fs=build_feature_structures(result.feature_structures),
+            fs=fs_payload,
             meta=result.meta,
             modification_meta=result.modification_meta,
             errors=result.errors,
         )
 
-    fs: list[FsRec] = []
-    next_id = 1
+    fs: list[dict[str, Any]] = []
     for a in result.annotations:
         fs.append(
-            FsRec(
-                id=next_id,
-                ref=a.ref,
-                type=a.type,
-                begin=a.begin,
-                end=a.end,
-                features={k: normalize_uima_value(v) for k, v in a.feature_map().items()},
-            )
+            {
+                "ref": a.ref,
+                "type": a.type,
+                "begin": a.begin,
+                "end": a.end,
+                "features": {k: normalize_uima_value(v) for k, v in a.feature_map().items()},
+            }
         )
-        next_id += 1
 
     return WireEnvelopeOut(
         sofa=result.sofa,
@@ -102,7 +114,7 @@ def result_to_wire(result: DuuiResult) -> WireEnvelopeOut:
     )
 
 
-class DuuiBinV1MsgpackCodec(Codec[DuuiDocument, DuuiResult]):
+class DuuiBinV1MsgpackCodec(Codec[V1RequestEnvelope, DuuiResult]):
     name = "duui-bin-v1-msgpack"
     request_media_type = "application/x-msgpack"
     response_media_type = "application/x-msgpack"
@@ -118,7 +130,7 @@ class DuuiBinV1MsgpackCodec(Codec[DuuiDocument, DuuiResult]):
             "spec": self.name,
         }
 
-    def decode_request(self, body: bytes) -> DuuiDocument:
+    def decode_request(self, body: bytes) -> V1RequestEnvelope:
         env_in = WireEnvelopeIn.model_validate(decode_msgpack(body))
         return wire_to_document(env_in)
 

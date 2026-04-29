@@ -1,7 +1,7 @@
 {
   "meta": {
     "implementation_lang": "Python",
-    "meta": {"example": "duui-whisper migration"},
+    "meta": {},
     "settings": {
       "validation": {
         "strict_mime_validation": true,
@@ -10,13 +10,13 @@
         "strict_sofa_data_type_validation": true,
         "strict_descriptor_mime_pattern_validation": true
       },
-      "limits": {"request_max_bytes": null, "response_max_bytes": null},
-      "errors": {"fail_on_codec_error": true, "include_validation_details": true},
-      "logging": {
-        "enabled": true,
-        "stream_timeout_minutes": 5,
-        "max_queue_size": 1000,
-        "metrics_collection_interval_seconds": 5
+      "limits": {
+        "request_max_bytes": null,
+        "response_max_bytes": null
+      },
+      "errors": {
+        "fail_on_codec_error": true,
+        "include_validation_details": true
       }
     }
   },
@@ -24,22 +24,37 @@
     "name": "whisper-msgpack-lua",
     "version": "1.0.0",
     "input": {
-      "sofa": {
-        "bytes": {"mimeType": "audio/*", "language": "x-unspecified"},
-        "text": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"},
-        "annotation": []
-      },
-      "types": []
+      "bytes": {
+        "default": {
+          "mimeType": "application/octet-stream",
+          "languages": ["x-unspecified"],
+          "types": {}
+        }
+      }
     },
     "output": {
-      "sofa": {"text": {"mimeType": "text/plain; charset=utf-8", "language": "x-unspecified"}},
-      "types": ["org.texttechnologylab.annotation.type.AudioToken"]
+      "text": {
+        "default": {
+          "mimeType": "text/plain; charset=utf-8",
+          "languages": ["x-unspecified"],
+          "types": {
+            "AudioToken": ["org.texttechnologylab.annotation.type.AudioToken"]
+          }
+        }
+      }
     }
   },
   "typesystem_xml_path": "TypeSystemWhisper.xml",
   "parameters_schema": {
-    "model_name": {"type": "string", "default": "base", "description": "OpenAI Whisper model name."},
-    "audio_base64": {"type": "string", "description": "Optional base64 encoded audio payload."},
-    "file_suffix": {"type": "string", "default": ".mp3", "description": "Temporary audio file suffix."}
+    "model_name": {
+      "type": "string",
+      "default": "base",
+      "description": "OpenAI Whisper model name."
+    },
+    "use_dummy": {
+      "type": "boolean",
+      "default": false,
+      "description": "Skip Whisper model load/transcribe and emit deterministic dummy token."
+    }
   }
 }

@@ -6,8 +6,8 @@ from time import time
 from duui_py.annotator import DuuiAnnotator
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.models import AnnotationMeta, DocumentModification, DuuiDocument, DuuiResult
-from duui_py.models.uima import Annotation
+from duui_py.models import AnnotatorMetaData, DocumentModification, V1RequestEnvelope, DuuiResult
+from duui_py.models.uima import Annotation, FeatureStructure, sofa_text_value
 
 DIV_TYPE = "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Div"
 ESSAY_SCORE_TYPE = "org.texttechnologylab.annotation.EssayScore"
@@ -17,7 +17,7 @@ class EssayScore(Annotation):
     type: str = ESSAY_SCORE_TYPE
 
 
-class EssayScorerAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
+class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
     config_path = "annotator_config.json"
 
     def codec(self) -> MsgPackLuaCodec:
@@ -36,8 +36,8 @@ class EssayScorerAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
         reason = f"length_factor={length_factor:.3f}, uniq_ratio={uniq_ratio:.3f}, cohesion={cohesion:.3f}"
         return score, reason
 
-    async def process(self, doc: DuuiDocument) -> DuuiResult:
-        text = doc.text or ""
+    async def process(self, doc: V1RequestEnvelope) -> DuuiResult:
+        text = sofa_text_value(doc.sofa) or ""
         model_label = str(doc.parameters.get("name_model") or "heuristic-essay-scorer")
 
         divs = [
@@ -47,15 +47,13 @@ class EssayScorerAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
         ]
 
         if not divs and text:
-            from duui_py.models import FsRec
-
-            divs = [FsRec(id=1, type=DIV_TYPE, begin=0, end=len(text), features={"id": "full-document"})]
+            divs = [FeatureStructure(type=DIV_TYPE, begin=0, end=len(text), features={"id": "full-document"})]
 
         annotations: list[EssayScore] = []
         for div in divs:
             covered = text[div.begin : div.end] if text else ""
             score, reason = self._heuristic_score(covered)
-            div_id = str(div.features.get("id") or div.id)
+            div_id = str(div.features.get("id") or "full-document")
             annotations.append(
                 EssayScore(
                     begin=div.begin,
@@ -72,7 +70,7 @@ class EssayScorerAnnotator(DuuiAnnotator[DuuiDocument, DuuiResult]):
 
         return DuuiResult(
             annotations=annotations,
-            meta=AnnotationMeta(
+            meta=AnnotatorMetaData(
                 name=self.config.descriptor.name,
                 version=self.config.descriptor.version,
                 modelName=model_label,

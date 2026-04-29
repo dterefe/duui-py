@@ -18,12 +18,7 @@ from duui_py.models import (
     AnnotatorMeta,
     ErrorSettings,
     FrameworkSettings,
-    InputDesc,
-    InputSofaSpec,
     LimitSettings,
-    OutputDesc,
-    OutputSofaSpec,
-    SofaModeSpec,
     ValidationSettings,
 )
 from duui_py.models.config import LoggingSettings
@@ -46,11 +41,13 @@ def _config(name: str) -> AnnotatorConfig:
             ),
         ),
         description=name,
-        descriptor=AnnotatorDescriptor(
-            name=name,
-            version="1.0.0",
-            input=InputDesc(sofa=InputSofaSpec(text=SofaModeSpec(mimeType="text/plain", language="x-unspecified"))),
-            output=OutputDesc(sofa=OutputSofaSpec(text=SofaModeSpec(mimeType="text/plain", language="x-unspecified"))),
+        descriptor=AnnotatorDescriptor.model_validate(
+            {
+                "name": name,
+                "version": "1.0.0",
+                "input": {"text": {"default": {"mimeType": "text/plain", "languages": ["x-unspecified"], "types": {}}}},
+                "output": {"text": {"default": {"mimeType": "text/plain", "languages": ["x-unspecified"], "types": {}}}},
+            }
         ),
         typesystem_xml_path=str(typesystem_path),
         parameters_schema={},
@@ -101,13 +98,6 @@ class StreamingUpperAnnotator(DuuiAnnotator[str, str]):
 
     async def process(self, doc: str) -> str:
         return doc.upper()
-
-    async def process_stream(self, docs: str | AsyncIterable[str]) -> AsyncIterator[str]:
-        if hasattr(docs, "__aiter__"):
-            async for doc in docs:  # type: ignore[union-attr]
-                yield doc.upper()
-            return
-        yield docs.upper()
 
 
 class BufferedUpperAnnotator(DuuiAnnotator[str, str]):

@@ -7,20 +7,31 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 Json = dict[str, Any]
 
 
+_ALLOWED_DOMAINS = ("text", "bytes", "uri", "annotation")
+
+
+def _dedup_keep_order(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item not in seen:
+            seen.add(item)
+            out.append(item)
+    return out
+
+
 def _validate_mime_pattern(value: str) -> None:
     for raw in value.split("|"):
         base = raw.split(";", 1)[0].strip().lower()
         if not base:
-            raise ValueError("sofa.mimeType must not contain empty alternatives")
+            raise ValueError("mimeType must not contain empty alternatives")
         if "/" not in base:
-            raise ValueError("sofa.mimeType must contain '/'")
+            raise ValueError("mimeType must contain '/'")
         major, minor = base.split("/", 1)
         if not major or not minor:
-            raise ValueError("sofa.mimeType must be major/minor or major/*")
-        if minor == "*":
-            continue
-        if "*" in minor:
-            raise ValueError("sofa.mimeType wildcard only allowed as major/*")
+            raise ValueError("mimeType must be major/minor")
+        if "*" in base:
+            raise ValueError("wildcards are not allowed in active descriptor mimeType entries")
 
 
 class ValidationSettings(BaseModel):
@@ -77,97 +88,110 @@ class AnnotatorMeta(BaseModel):
     settings: FrameworkSettings = Field(default_factory=FrameworkSettings)
 
 
-class SofaSpec(BaseModel):
+class DomainAlternative(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-
-    mimeType: str = Field(min_length=1)
-    language: str = Field(min_length=1)
-
-
-class SofaModeSpec(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="allow")
 
     mimeType: str | None = None
-    language: str | None = None
-    targetView: str | None = None
+    languages: list[str] = Field(default_factory=list)
+    types: dict[str, list[str]] = Field(default_factory=dict)
 
 
-class InputSofaSpec(BaseModel):
+class DomainSpec(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+
+    languages: list[str] = Field(default_factory=list)
+    types: dict[str, list[str]] = Field(default_factory=dict)
+    default: DomainAlternative | None = None
+    aliases: dict[str, DomainAlternative] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def collect_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        aliases = dict(normalized.get("aliases") or {})
+        for key, value in list(normalized.items()):
+            if key in {"languages", "types", "default", "aliases"}:
+                continue
+            if isinstance(value, dict):
+                aliases[key] = value
+                normalized.pop(key)
+        normalized["aliases"] = aliases
+        return normalized
+
+    def iter_alternatives(self) -> list[tuple[str, DomainAlternative]]:
+        out: list[tuple[str, DomainAlternative]] = []
+        if self.default is not None:
+            out.append(("default", self.default))
+        for name in sorted(self.aliases):
+            out.append((name, self.aliases[name]))
+        return out
+
+    def get_alternative(self, alias: str) -> DomainAlternative | None:
+        if alias == "default":
+            return self.default
+        return self.aliases.get(alias)
+
+
+class ResolvedDomainSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    text: SofaModeSpec | None = None
-    uri: SofaModeSpec | None = None
-    bytes: SofaModeSpec | None = None
-    annotation: list[str] = Field(default_factory=list)
-    selections: list[str] = Field(default_factory=list)
-
-    def annotation_types(self) -> list[str]:
-        merged = list(self.annotation) + list(self.selections)
-        dedup: list[str] = []
-        seen: set[str] = set()
-        for entry in merged:
-            if entry not in seen:
-                seen.add(entry)
-                dedup.append(entry)
-        return dedup
-
-    def default_mime_type(self) -> str:
-        for mode in (self.text, self.bytes, self.uri):
-            if mode is not None and mode.mimeType:
-                return mode.mimeType
-        return "text/plain; charset=utf-8"
-
-    def default_language(self) -> str:
-        for mode in (self.text, self.bytes, self.uri):
-            if mode is not None and mode.language:
-                return mode.language
-        return "x-unspecified"
+    domain: str
+    alias: str
+    mimeType: str | None = None
+    languages: list[str] = Field(default_factory=list)
+    types: dict[str, list[str]] = Field(default_factory=dict)
 
 
-class OutputSofaSpec(BaseModel):
+class IODescriptorVNext(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    text: SofaModeSpec | None = None
-    uri: SofaModeSpec | None = None
-    bytes: SofaModeSpec | None = None
+    languages: list[str] = Field(default_factory=list)
+    types: dict[str, list[str]] = Field(default_factory=dict)
+    text: DomainSpec | None = None
+    bytes: DomainSpec | None = None
+    uri: DomainSpec | None = None
+    annotation: DomainSpec | None = None
 
-    def default_mime_type(self) -> str:
-        for mode in (self.text, self.bytes, self.uri):
-            if mode is not None and mode.mimeType:
-                return mode.mimeType
-        return "text/plain; charset=utf-8"
+    def _domain_spec(self, domain: str) -> DomainSpec | None:
+        if domain not in _ALLOWED_DOMAINS:
+            return None
+        return getattr(self, domain)
 
-    def default_language(self) -> str:
-        for mode in (self.text, self.bytes, self.uri):
-            if mode is not None and mode.language:
-                return mode.language
-        return "x-unspecified"
+    def resolve(self, domain: str, alias: str = "default") -> ResolvedDomainSpec:
+        spec = self._domain_spec(domain)
+        if spec is None:
+            raise ValueError(f"descriptor domain '{domain}' not configured")
+        alt = spec.get_alternative(alias)
+        if alt is None:
+            raise ValueError(f"descriptor domain '{domain}' alias '{alias}' not configured")
 
+        merged_types: dict[str, list[str]] = {}
+        for source in (self.types, spec.types, alt.types):
+            for key, candidates in source.items():
+                merged_types[key] = _dedup_keep_order(list(merged_types.get(key, [])) + list(candidates))
 
-class InputDesc(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+        merged_languages = _dedup_keep_order(list(self.languages) + list(spec.languages) + list(alt.languages))
+        return ResolvedDomainSpec(
+            domain=domain,
+            alias=alias,
+            mimeType=alt.mimeType,
+            languages=merged_languages,
+            types=merged_types,
+        )
 
-    sofa: InputSofaSpec = Field(default_factory=InputSofaSpec)
-    types: list[str] = Field(default_factory=list)
-
-    def default_mime_type(self) -> str:
-        return self.sofa.default_mime_type()
-
-    def default_language(self) -> str:
-        return self.sofa.default_language()
-
-
-class OutputDesc(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    sofa: OutputSofaSpec = Field(default_factory=OutputSofaSpec)
-    types: list[str] = Field(default_factory=list)
-
-    def default_mime_type(self) -> str:
-        return self.sofa.default_mime_type()
-
-    def default_language(self) -> str:
-        return self.sofa.default_language()
+    def first_available(self) -> ResolvedDomainSpec | None:
+        for domain in _ALLOWED_DOMAINS:
+            spec = self._domain_spec(domain)
+            if spec is None:
+                continue
+            if spec.default is not None:
+                return self.resolve(domain, "default")
+            alternatives = spec.iter_alternatives()
+            if alternatives:
+                return self.resolve(domain, alternatives[0][0])
+        return None
 
 
 class AnnotatorDescriptor(BaseModel):
@@ -175,65 +199,8 @@ class AnnotatorDescriptor(BaseModel):
 
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
-    input: InputDesc
-    output: OutputDesc
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_legacy_descriptor_shape(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-
-        normalized = dict(data)
-
-        input_part = normalized.get("input")
-        if isinstance(input_part, dict) and "domain" in input_part:
-            domain = input_part.get("domain", {})
-            domain_sofa = domain.get("sofa", {}) if isinstance(domain, dict) else {}
-            optional_types = list(domain.get("optional_types", [])) if isinstance(domain, dict) else []
-            optional_inputs = input_part.get("optional_inputs", [])
-            optional_input_types = [
-                item.get("type")
-                for item in optional_inputs
-                if isinstance(item, dict) and isinstance(item.get("type"), str)
-            ]
-            merged_types = [*optional_types, *optional_input_types]
-            dedup_types: list[str] = []
-            seen: set[str] = set()
-            for item in merged_types:
-                if item not in seen:
-                    seen.add(item)
-                    dedup_types.append(item)
-
-            normalized["input"] = {
-                "sofa": {
-                    "text": {
-                        "mimeType": domain_sofa.get("mimeType", "text/plain; charset=utf-8"),
-                        "language": domain_sofa.get("language", "x-unspecified"),
-                    },
-                    "annotation": dedup_types,
-                },
-                "types": dedup_types,
-            }
-
-        output_part = normalized.get("output")
-        if isinstance(output_part, dict):
-            sofa_part = output_part.get("sofa")
-            if isinstance(sofa_part, dict) and (
-                "mimeType" in sofa_part or "language" in sofa_part or "targetView" in sofa_part
-            ):
-                normalized["output"] = {
-                    "sofa": {
-                        "text": {
-                            "mimeType": sofa_part.get("mimeType"),
-                            "language": sofa_part.get("language"),
-                            "targetView": sofa_part.get("targetView"),
-                        }
-                    },
-                    "types": list(output_part.get("types", [])),
-                }
-
-        return normalized
+    input: IODescriptorVNext
+    output: IODescriptorVNext
 
 
 class AnnotatorConfig(BaseModel):
@@ -248,13 +215,17 @@ class AnnotatorConfig(BaseModel):
     @model_validator(mode="after")
     def validate_descriptor_patterns(self) -> Self:
         validation = self.meta.settings.validation
-        if validation.strict_mime_validation and validation.strict_descriptor_mime_pattern_validation:
-            input_mime = self.descriptor.input.default_mime_type()
-            output_mime = self.descriptor.output.default_mime_type()
-            if input_mime:
-                _validate_mime_pattern(input_mime)
-            if output_mime:
-                _validate_mime_pattern(output_mime)
+        if not (validation.strict_mime_validation and validation.strict_descriptor_mime_pattern_validation):
+            return self
+
+        for io_desc in (self.descriptor.input, self.descriptor.output):
+            for domain in _ALLOWED_DOMAINS:
+                spec = getattr(io_desc, domain)
+                if spec is None:
+                    continue
+                for _, alt in spec.iter_alternatives():
+                    if alt.mimeType:
+                        _validate_mime_pattern(alt.mimeType)
         return self
 
 

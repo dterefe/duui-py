@@ -32,31 +32,50 @@
     "name": "spacy-lua-msgpack",
     "version": "1.0.0",
     "input": {
-      "sofa": {
-        "text": {
+      "types": {},
+      "text": {
+        "default": {
+          "types": {},
           "mimeType": "text/plain; charset=utf-8",
-          "language": "x-unspecified"
-        },
-        "annotation": []
-      },
-      "types": []
+          "languages": [
+            "x-unspecified"
+          ]
+        }
+      }
     },
     "output": {
-      "sofa": {
-        "text": {
-          "mimeType": "text/plain; charset=utf-8",
-          "language": "x-unspecified"
-        }
+      "types": {
+        "Sentence": [
+          "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence"
+        ],
+        "Token": [
+          "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token"
+        ],
+        "Lemma": [
+          "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma"
+        ],
+        "POS": [
+          "de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS"
+        ],
+        "MorphologicalFeatures": [
+          "de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.morph.MorphologicalFeatures"
+        ],
+        "Dependency": [
+          "de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.Dependency"
+        ],
+        "NamedEntity": [
+          "de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity"
+        ]
       },
-      "types": [
-        "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence",
-        "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token",
-        "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma",
-        "de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS",
-        "de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.morph.MorphologicalFeatures",
-        "de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.Dependency",
-        "de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity"
-      ]
+      "text": {
+        "default": {
+          "types": {},
+          "mimeType": "text/plain; charset=utf-8",
+          "languages": [
+            "x-unspecified"
+          ]
+        }
+      }
     }
   },
   "typesystem_xml_path": "TypeSystemSpacy.xml",
@@ -65,7 +84,12 @@
       "type": "string",
       "description": "Name of the spaCy model to use",
       "default": "en_core_web_sm",
-      "enum": ["en_core_web_sm", "de_core_news_sm", "fr_core_news_sm", "xx_ent_wiki_sm"]
+      "enum": [
+        "en_core_web_sm",
+        "de_core_news_sm",
+        "fr_core_news_sm",
+        "xx_ent_wiki_sm"
+      ]
     },
     "use_existing_tokens": {
       "type": "boolean",
