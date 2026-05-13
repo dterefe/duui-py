@@ -114,62 +114,28 @@ from __future__ import annotations
 from duui_py.annotator import DuuiAnnotator
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
 from duui_py.models import V1RequestEnvelope, DuuiResult
-from duui_py.logging import (
-    configure_logger, 
-    StreamSink, 
-    ConsoleSink, 
-    configure_stream_manager,
-    EventContext,
-    create_event_context_from_request,
-    get_event_logger
-)
+from duui_py.logging import get_event_logger
 from duui_py.logging.errors import log_errors
 
 
 class MyAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
     config_path = "annotator_config.example.json"
     
-    def __init__(self, config_path: str | None = None, config: dict | None = None):
-        super().__init__(config_path, config)
-        
-        # Configure logging and event streaming
-        stream_manager = configure_stream_manager(default_ttl_minutes=5)
-        stream_sink = StreamSink(stream_manager)
-        console_sink = ConsoleSink()  # For debugging
-        
-        configure_logger(
-            sinks=[stream_sink, console_sink],
-            default_context={"annotator": self.config.descriptor.name},
-            annotator_descriptor=self.config.descriptor,
-            start_background_worker=True
-        )
-        
-        self.logger = get_event_logger()
-    
     def codec(self) -> MsgPackLuaCodec:
         return MsgPackLuaCodec(self.config)
     
-    @log_errors(log_level="ERROR", recovery_suggestion="Check input format")
+    @log_errors(recovery_suggestion="Check input format")
     async def process(self, doc: V1RequestEnvelope) -> DuuiResult:
-        # Set request context from event-context parameter
-        event_context_param = self.request.headers.get("x-event-context", "")
-        context = create_event_context_from_request(
-            event_context_param=event_context_param,
-            request_id=self.request.id,
-            artifact_id=doc.id
-        )
-        
-        await self.logger.info(f"Processing document {doc.id}")
-        
-        # Your processing logic here
+        logger = get_event_logger()
+        await logger.info("Processing document", {"parameters": dict(doc.parameters)})
+
         result = await self._process_document(doc)
         
-        # Log metrics
-        await self.logger.metric(
+        await logger.metric(
             category="processing",
             name="document_processing_time",
             value=125.5,
-            unit="milliseconds",
+            unit="ms",
             interval_ms=1000
         )
         
@@ -196,13 +162,128 @@ uvicorn my_module:app --host 0.0.0.0 --port 9714
 
 ## Logging and Event Streaming
 
+`duui-py` models all annotator telemetry as events. Java DUUI can subscribe to these events and correlate them with its own `DUUIEvent`s via trace/task/artifact context.
+
+Event kinds:
+
+- `log`: structured log messages with levels `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`
+- `metric`: named numeric measurements with category, unit, interval, and tags
+- `error`: structured failures with error type, stack trace, and recovery suggestion
+
+When logging is enabled in `annotator_config.json`, `create_app(...)` configures:
+
+- a request-scoped event context middleware
+- the global event logger returned by `get_event_logger()`
+- an SSE stream manager under `/v2/events`
+- optional automatic process/system metrics
+
+You normally do not configure this manually in the annotator class.
+
+### Annotator Logging Snippets
+
+```py3
+from time import time
+
+from duui_py.logging import get_event_logger
+from duui_py.logging.errors import log_errors
+from duui_py.models.uima import sofa_text_value
+
+
+@log_errors(recovery_suggestion="Check the incoming sofa text and annotator parameters.")
+async def process(self, doc):
+    started = time()
+    logger = get_event_logger()
+    text = sofa_text_value(doc.sofa) or ""
+
+    await logger.info(
+        "Processing started",
+        {"characters": len(text), "parameters": dict(doc.parameters)},
+    )
+
+    await logger.debug(
+        "Model invocation configured",
+        {"model": "example-model", "batch_size": 32},
+    )
+
+    # annotator work happens here
+    matches = 2
+
+    elapsed_ms = int((time() - started) * 1000)
+    await logger.metric(
+        category="processing",
+        name="matches",
+        value=matches,
+        unit="count",
+        interval_ms=elapsed_ms,
+        tags={"component": "example"},
+    )
+
+    await logger.info(
+        "Processing completed",
+        {"matches": matches, "elapsed_ms": elapsed_ms},
+    )
+```
+
+Structured error events can be emitted directly, although `@log_errors(...)` is the normal path:
+
+```py3
+try:
+    ...
+except Exception as error:
+    await logger.error_event(
+        error_type=type(error).__name__,
+        message=str(error),
+        stack_trace=traceback.format_exc(),
+        recovery_suggestion="Validate input payload and annotator parameters.",
+    )
+    raise
+```
+
+`await logger.info(...)` and the other logger calls are cooperative async calls. They do not block the OS thread; they enqueue/send events through the async logging path and yield to the event loop when needed.
+
 ### Real-time Event Streaming (SSE)
 
-The framework provides Server-Sent Events (SSE) streaming via the `/v2/events` endpoint:
+The framework provides Server-Sent Events (SSE) streaming via `/v2/events`.
+
+First register a stream:
+
+```bash
+curl -s -X POST http://localhost:9714/v2/events/connect \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "annotator_id": "gnfinder-replica-0",
+    "replica_id": "gnfinder-replica-0",
+    "request_id": "manual-test",
+    "ttl_minutes": 5
+  }'
+```
+
+Response:
+
+```json
+{
+  "stream_id": "0bd2edd2-3d5f-480f-9a9b-58ac08fca7c4",
+  "expires_at": "2026-05-13T10:30:58.000000Z"
+}
+```
+
+Then subscribe:
+
+```bash
+curl -N "http://localhost:9714/v2/events/stream?stream_id=0bd2edd2-3d5f-480f-9a9b-58ac08fca7c4"
+```
+
+Each SSE item is a JSON event:
+
+```text
+data: {"type":"log","timestamp":"2026-05-13T10:25:58.123Z","event_id":"...","context":{"trace_id":"...","task_id":"...","artifact_id":"..."},"level":"INFO","message":"Processing started","extra":{"characters":42}}
+```
+
+JavaScript client:
 
 ```js
-// JavaScript client
-const eventSource = new EventSource('/v2/events?identifiers=annotator=my-annotator,replica=replica-1');
+const streamId = "0bd2edd2-3d5f-480f-9a9b-58ac08fca7c4";
+const eventSource = new EventSource(`/v2/events/stream?stream_id=${streamId}`);
 
 eventSource.onmessage = (event) => {
     const data = JSON.parse(event.data);
@@ -213,20 +294,24 @@ eventSource.onmessage = (event) => {
 ### Python client
 
 ```py3
+import json
+
 import sseclient
 import requests
 
 # Register stream first
 response = requests.post(
-    'http://localhost:8000/v2/events/register',
+    'http://localhost:9714/v2/events/connect',
     json={
-        'identifiers': {'annotator_id': 'test-annotator', 'replica_id': 'replica-1'},
+        'annotator_id': 'test-annotator',
+        'replica_id': 'replica-1',
         'ttl_minutes': 5
     }
 )
+stream_id = response.json()["stream_id"]
 
 # Connect to SSE stream
-messages = sseclient.SSEClient('http://localhost:8000/v2/events/stream/{stream_id}')
+messages = sseclient.SSEClient(f'http://localhost:9714/v2/events/stream?stream_id={stream_id}')
 for msg in messages:
     event = json.loads(msg.data)
     print(f"Event: {event['type']} - {event.get('message', '')}")
@@ -234,14 +319,31 @@ for msg in messages:
 
 ### Event Context Parameters
 
-Pass event context as query parameter or header:
+DUUI Java sends `event-context` on `/v1/process` requests so annotator-side logs can be correlated with Java-side pipeline events.
 
 ```
 # Query parameter format
-/v1/process?event-context=annotator=my-annotator,artifact=doc123,replica=replica-1
+/v1/process?event-context=trace_id=...,span_id=...,task_id=...,artifact_id=...,component_id=...
 
-# Or as header
-X-Event-Context: annotator=my-annotator,artifact=doc123,replica=replica-1,application=my-app
+# Request id header
+x-request-id: 1f3df44b-7eb6-4c65-8b57-1c3d9016b519
+```
+
+The request middleware parses this context and every `logger.info(...)`, `logger.metric(...)`, and `logger.error_event(...)` emitted during that request inherits it.
+
+### GNFinder Example Output
+
+This is a shortened output from the Java DUUI GNFinder XMI pipeline test using the real `examples/gnfinder-msgpack-lua` annotator. Java DUUI and remote annotator events share the same `trace`, `task`, and `artifact` ids:
+
+```text
+[LOG] INFO duui.executor - Executing stage remote-gnfinder for artifact bd2451ab-725b-4923-811a-a8e2e92324ea trace=f4262e736b109637a9f90d8ccc2d7872 task=2be8a310-4de1-4194-b487-6fae82533d1d artifact=bd2451ab-725b-4923-811a-a8e2e92324ea
+[LOG] INFO duui.v1 - Sending artifact bd2451ab-725b-4923-811a-a8e2e92324ea to v1 annotator gnfinder-replica-0 trace=f4262e736b109637a9f90d8ccc2d7872 task=2be8a310-4de1-4194-b487-6fae82533d1d artifact=bd2451ab-725b-4923-811a-a8e2e92324ea
+
+[LOG] INFO remote-log - Process request started (normal) trace=f4262e736b109637a9f90d8ccc2d7872 task=2be8a310-4de1-4194-b487-6fae82533d1d artifact=bd2451ab-725b-4923-811a-a8e2e92324ea
+[LOG] INFO remote-log - GNFinder processing started trace=f4262e736b109637a9f90d8ccc2d7872 task=2be8a310-4de1-4194-b487-6fae82533d1d artifact=bd2451ab-725b-4923-811a-a8e2e92324ea
+[LOG] DEBUG remote-log - GNFinder regex scan configured trace=f4262e736b109637a9f90d8ccc2d7872 task=2be8a310-4de1-4194-b487-6fae82533d1d artifact=bd2451ab-725b-4923-811a-a8e2e92324ea
+[METRIC] processing trace=f4262e736b109637a9f90d8ccc2d7872 task=2be8a310-4de1-4194-b487-6fae82533d1d artifact=bd2451ab-725b-4923-811a-a8e2e92324ea
+[LOG] INFO remote-log - GNFinder processing completed trace=f4262e736b109637a9f90d8ccc2d7872 task=2be8a310-4de1-4194-b487-6fae82533d1d artifact=bd2451ab-725b-4923-811a-a8e2e92324ea
 ```
 
 ## Metrics Collection
@@ -253,7 +355,7 @@ from duui_py.logging import configure_metric_collector
 
 # Configure automatic metrics collection
 collector = configure_metric_collector(
-    interval_seconds=5,
+    collection_interval_seconds=5,
     include_system_metrics=True,
     include_process_metrics=True,
     include_disk_metrics=True,
@@ -314,10 +416,11 @@ def process_with_context(doc):
 
 ### Logging and monitoring endpoints
 
-- `POST /v2/events/register` → register a new event stream
-- `GET /v2/events/stream/{stream_id}` → SSE stream for receiving events
+- `POST /v2/events/connect` → register a new event stream
+- `GET /v2/events/stream?stream_id=...` → SSE stream for receiving events
 - `GET /v2/events/list` → list active streams
-- `GET /v2/events/{stream_id}/info` → get stream information
+- `GET /v2/events/info/{stream_id}` → get stream information
+- `DELETE /v2/events/{stream_id}` → disconnect a stream
 
 ## Architecture Notes
 

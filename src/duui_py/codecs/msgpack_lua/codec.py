@@ -290,6 +290,9 @@ end
 if JCasUtil == nil then
     JCasUtil = luajava.bindClass("org.apache.uima.fit.util.JCasUtil")
 end
+if DUUIBytes == nil then
+    DUUIBytes = luajava.bindClass("org.texttechnologylab.duui.communication.DUUIBytes")
+end
 
 local descriptor = json.decode([=[{descriptor_json}]=])
 
@@ -300,61 +303,30 @@ local CHUNK_FEATURE_STRUCTURE = 0x04
 local CHUNK_END = 0x05
 local CHUNK_ERROR = 0x06
 
-local function len_bytes_be(n)
-    return string.char(
-        math.floor(n / 16777216) % 256,
-        math.floor(n / 65536) % 256,
-        math.floor(n / 256) % 256,
-        n % 256
-    )
+local function byte_len(value)
+    if value == nil then
+        return 0
+    end
+    if type(value) == "string" then
+        return #value
+    end
+    return DUUIBytes:length(value)
 end
 
 local function write_chunk(output_stream, chunk_type, payload)
-    output_stream:write(string.char(chunk_type))
-    output_stream:write(len_bytes_be(#payload))
-    if #payload > 0 then
+    local payload_len = byte_len(payload)
+    output_stream:write(chunk_type)
+    output_stream:write(math.floor(payload_len / 16777216) % 256)
+    output_stream:write(math.floor(payload_len / 65536) % 256)
+    output_stream:write(math.floor(payload_len / 256) % 256)
+    output_stream:write(payload_len % 256)
+    if payload_len > 0 then
         output_stream:write(payload)
     end
 end
 
 local function read_exact(input_stream, n)
-    if n <= 0 then
-        return ""
-    end
-
-    local remaining = n
-    local parts = {{}}
-
-    while remaining > 0 do
-        local chunk = input_stream:read(remaining)
-        if chunk == nil then
-            return nil
-        end
-
-        local chunk_type = type(chunk)
-        if chunk_type == "number" then
-            if chunk < 0 then
-                return nil
-            end
-            parts[#parts + 1] = string.char(chunk)
-            remaining = remaining - 1
-        elseif chunk_type == "string" then
-            local chunk_len = #chunk
-            if chunk_len == 0 then
-                return nil
-            end
-            if chunk_len > remaining then
-                chunk = string.sub(chunk, 1, remaining)
-                chunk_len = #chunk
-            end
-            parts[#parts + 1] = chunk
-            remaining = remaining - chunk_len
-        else
-            return nil
-        end
-    end
-
-    return table.concat(parts)
+    return DUUIBytes:readNBytes(input_stream, n)
 end
 
 local function read_chunk(input_stream)
@@ -369,12 +341,12 @@ local function read_chunk(input_stream)
     end
 
     local payload_len =
-        string.byte(len_b, 1) * 16777216 +
-        string.byte(len_b, 2) * 65536 +
-        string.byte(len_b, 3) * 256 +
-        string.byte(len_b, 4)
+        DUUIBytes:unsignedByte(len_b, 0) * 16777216 +
+        DUUIBytes:unsignedByte(len_b, 1) * 65536 +
+        DUUIBytes:unsignedByte(len_b, 2) * 256 +
+        DUUIBytes:unsignedByte(len_b, 3)
 
-    local payload = ""
+    local payload = nil
     if payload_len > 0 then
         local p = read_exact(input_stream, payload_len)
         if not p then
@@ -383,7 +355,50 @@ local function read_chunk(input_stream)
         payload = p
     end
 
-    return {{ type = string.byte(type_b), payload = payload }}
+    return {{ type = DUUIBytes:unsignedByte(type_b, 0), payload = payload }}
+end
+
+local function unpack_value(u)
+    local value = u:unpackValue()
+    if value:isNilValue() then
+        return nil
+    end
+    if value:isStringValue() then
+        return value:asStringValue():asString()
+    end
+    if value:isIntegerValue() then
+        return value:asIntegerValue():asLong()
+    end
+    if value:isFloatValue() then
+        return value:asFloatValue():toDouble()
+    end
+    if value:isBooleanValue() then
+        return value:asBooleanValue():getBoolean()
+    end
+    return tostring(value)
+end
+
+local function set_feature(fs, feature, value)
+    if feature == nil or value == nil then
+        return
+    end
+    local range = feature:getRange()
+    local range_name = range:getName()
+    if range_name == "uima.cas.String" then
+        fs:setStringValue(feature, tostring(value))
+    elseif range_name == "uima.cas.Short" then
+        fs:setShortValue(feature, value)
+    elseif range_name == "uima.cas.Integer" then
+        fs:setIntValue(feature, value)
+    elseif range_name == "uima.cas.Long" then
+        fs:setLongValue(feature, value)
+    elseif range_name == "uima.cas.Float" then
+        fs:setFloatValue(feature, value)
+    elseif range_name == "uima.cas.Double" then
+        fs:setDoubleValue(feature, value)
+    elseif range_name == "uima.cas.Boolean" then
+        fs:setBooleanValue(feature, value)
+    end
 end
 
 local function pack_error_payload(message)
@@ -601,7 +616,7 @@ function deserialize(inputCas, inputStream)
             if saw_start then
                 error("duplicate START chunk")
             end
-            if #payload > 0 then
+            if byte_len(payload) > 0 then
                 local u = MessagePack:newDefaultUnpacker(payload)
                 u:skipValue()
                 u:close()
@@ -648,20 +663,60 @@ function deserialize(inputCas, inputStream)
                 end
             end
 
-        elseif t == CHUNK_ANNOTATION or t == CHUNK_FEATURE_STRUCTURE then
+        elseif t == CHUNK_ANNOTATION then
+            local u = MessagePack:newDefaultUnpacker(payload)
+            local map_size = u:unpackMapHeader()
+            local type_name = nil
+            local begin = nil
+            local finish = nil
+            local features = {{}}
+            for _ = 1, map_size do
+                local k = u:unpackString()
+                if k == "type" then
+                    type_name = u:unpackString()
+                elseif k == "begin" then
+                    begin = u:unpackInt()
+                elseif k == "end" then
+                    finish = u:unpackInt()
+                elseif k == "features" then
+                    local fs_size = u:unpackMapHeader()
+                    for __ = 1, fs_size do
+                        local fk = u:unpackString()
+                        features[fk] = unpack_value(u)
+                    end
+                else
+                    u:skipValue()
+                end
+            end
+            u:close()
+            if type_name ~= nil and begin ~= nil and finish ~= nil then
+                local cas = inputCas:getCas()
+                local ts = cas:getTypeSystem()
+                local ann_type = ts:getType(type_name)
+                if ann_type == nil then
+                    error("unknown annotation type: " .. tostring(type_name))
+                end
+                local ann = cas:createAnnotation(ann_type, begin, finish)
+                for fk, fv in pairs(features) do
+                    set_feature(ann, ann_type:getFeatureByBaseName(fk), fv)
+                end
+                cas:addFsToIndexes(ann)
+            end
+
+        elseif t == CHUNK_FEATURE_STRUCTURE then
             local u = MessagePack:newDefaultUnpacker(payload)
             u:skipValue()
             u:close()
 
         elseif t == CHUNK_END then
-            if #payload ~= 0 then
+            if byte_len(payload) ~= 0 then
                 error("END chunk must be empty")
             end
             return
 
         elseif t == CHUNK_ERROR then
             local message = "received ERROR chunk"
-            if #payload > 0 then
+            if byte_len(payload) > 0 then
                 local ok_unpack, unpack_err = pcall(function()
                     local u = MessagePack:newDefaultUnpacker(payload)
                     local map_size = u:unpackMapHeader()

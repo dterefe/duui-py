@@ -191,6 +191,16 @@ class EventLogger:
         event_context = get_event_context()
         if event_context:
             context.update(event_context.context)
+            if event_context.request_id:
+                context["request_id"] = event_context.request_id
+            if event_context.artifact_id:
+                context["artifact_id"] = event_context.artifact_id
+            if event_context.annotator_id:
+                context["annotator_id"] = event_context.annotator_id
+            if event_context.replica_id:
+                context["replica_id"] = event_context.replica_id
+            if event_context.application_id:
+                context["application_id"] = event_context.application_id
         
         return context
     

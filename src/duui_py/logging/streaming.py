@@ -89,7 +89,7 @@ class StreamConnection:
                 self.last_activity = datetime.now(timezone.utc)
                 
                 # Format as SSE
-                data = json.dumps(event.model_dump())
+                data = event.model_dump_json()
                 yield f"data: {data}\n\n".encode('utf-8')
                 
                 self._queue.task_done()
