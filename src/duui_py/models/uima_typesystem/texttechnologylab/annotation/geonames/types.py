@@ -7,7 +7,7 @@ from pydantic import Field
 
 from duui_py.models.uima import Annotation, FeatureStructure, UimaValue
 
-class GeoNamesEntity_annotation_geonames_GeoNamesEntity(Annotation):
+class GeoNamesEntity(Annotation):
     type: str = "org.texttechnologylab.annotation.geonames.GeoNamesEntity"
     adm1: Optional[str] = None
     adm2: Optional[str] = None
@@ -23,11 +23,13 @@ class GeoNamesEntity_annotation_geonames_GeoNamesEntity(Annotation):
     name: Optional[str] = None
     referenceAnnotation: Optional[UimaValue] = None
 
+GeoNamesEntity_annotation_geonames_GeoNamesEntity = GeoNamesEntity
+
 UIMA_TYPE_TO_CLASS = {
-    "org.texttechnologylab.annotation.geonames.GeoNamesEntity": GeoNamesEntity_annotation_geonames_GeoNamesEntity,
+    "org.texttechnologylab.annotation.geonames.GeoNamesEntity": GeoNamesEntity,
 }
 
 __all__ = [
-    "GeoNamesEntity_annotation_geonames_GeoNamesEntity",
+    "GeoNamesEntity",
     "UIMA_TYPE_TO_CLASS",
 ]

@@ -81,9 +81,9 @@ def test_whisper_process_bytes_yields_result(monkeypatch) -> None:
         return out
 
     got = asyncio.run(run())
-    assert len(got) == 1
-    assert len(got[0].annotations) == 2
-    assert got[0].annotations[0].features["value"] == "hello"
+    assert len(got) == 4
+    assert got[0].features["value"] == "hello"
+    assert got[1].features["value"] == "world"
 
 
 def test_whisper_endpoint_processes_bytes(monkeypatch) -> None:

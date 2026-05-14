@@ -88,7 +88,7 @@ class AnnotatorMeta(BaseModel):
     settings: FrameworkSettings = Field(default_factory=FrameworkSettings)
 
 
-class DomainAlternative(BaseModel):
+class Domain(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     mimeType: str | None = None
@@ -96,13 +96,16 @@ class DomainAlternative(BaseModel):
     types: dict[str, list[str]] = Field(default_factory=dict)
 
 
+DomainAlternative = Domain
+
+
 class DomainSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="allow")
 
     languages: list[str] = Field(default_factory=list)
     types: dict[str, list[str]] = Field(default_factory=dict)
-    default: DomainAlternative | None = None
-    aliases: dict[str, DomainAlternative] = Field(default_factory=dict)
+    default: Domain | None = None
+    aliases: dict[str, Domain] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -120,15 +123,15 @@ class DomainSpec(BaseModel):
         normalized["aliases"] = aliases
         return normalized
 
-    def iter_alternatives(self) -> list[tuple[str, DomainAlternative]]:
-        out: list[tuple[str, DomainAlternative]] = []
+    def iter_alternatives(self) -> list[tuple[str, Domain]]:
+        out: list[tuple[str, Domain]] = []
         if self.default is not None:
             out.append(("default", self.default))
         for name in sorted(self.aliases):
             out.append((name, self.aliases[name]))
         return out
 
-    def get_alternative(self, alias: str) -> DomainAlternative | None:
+    def get_alternative(self, alias: str) -> Domain | None:
         if alias == "default":
             return self.default
         return self.aliases.get(alias)
@@ -144,7 +147,7 @@ class ResolvedDomainSpec(BaseModel):
     types: dict[str, list[str]] = Field(default_factory=dict)
 
 
-class IODescriptorVNext(BaseModel):
+class IODescriptor(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     languages: list[str] = Field(default_factory=list)
@@ -199,8 +202,11 @@ class AnnotatorDescriptor(BaseModel):
 
     name: str = Field(min_length=1)
     version: str = Field(min_length=1)
-    input: IODescriptorVNext
-    output: IODescriptorVNext
+    input: IODescriptor
+    output: IODescriptor
+
+
+IODescriptorVNext = IODescriptor
 
 
 class AnnotatorConfig(BaseModel):

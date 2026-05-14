@@ -12,6 +12,7 @@ from .core import (
     StreamSink,
     ConsoleSink,
     get_event_logger,
+    get_event_logger_or_none,
     configure_logger,
 )
 from .context import (
@@ -30,7 +31,6 @@ from .streaming import (
     StreamRegistrationRequest,
     StreamRegistrationResponse,
     StreamInfo,
-    router as events_router,
 )
 from .metrics import MetricCollector, get_metric_collector, configure_metric_collector
 from .errors import log_errors, error_context, log_exception, log_error_message
@@ -48,6 +48,7 @@ __all__ = [
     "StreamSink",
     "ConsoleSink",
     "get_event_logger",
+    "get_event_logger_or_none",
     "configure_logger",
     # Context management
     "EventContext",
@@ -64,7 +65,6 @@ __all__ = [
     "StreamRegistrationRequest",
     "StreamRegistrationResponse",
     "StreamInfo",
-    "events_router",
     # Metrics
     "MetricCollector",
     "get_metric_collector",

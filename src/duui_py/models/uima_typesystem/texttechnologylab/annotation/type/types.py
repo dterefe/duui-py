@@ -257,7 +257,7 @@ class AudioSentence(FeatureStructure):
     timeEnd: Optional[float] = None
     timeStart: Optional[float] = None
 
-class AudioToken(FeatureStructure):
+class AudioToken(Annotation):
     type: str = "org.texttechnologylab.annotation.type.AudioToken"
     timeEnd: Optional[float] = None
     timeStart: Optional[float] = None
@@ -823,7 +823,7 @@ class Substance_annotation_type_Substance(FeatureStructure):
     specific: Optional[bool] = None
     value: Optional[str] = None
 
-class Taxon_annotation_type_Taxon(FeatureStructure):
+class Taxon(Annotation):
     type: str = "org.texttechnologylab.annotation.type.Taxon"
     identifier: Optional[str] = None
     metaphor: Optional[bool] = None
@@ -839,6 +839,8 @@ class TextElement(FeatureStructure):
     modified: Optional[int] = None
     user: Optional[str] = None
     value: Optional[UimaValue] = None
+
+Taxon_annotation_type_Taxon = Taxon
 
 class TextTechnologyEntity(FeatureStructure):
     type: str = "org.texttechnologylab.annotation.type.TextTechnologyEntity"
@@ -1094,7 +1096,7 @@ UIMA_TYPE_TO_CLASS = {
     "org.texttechnologylab.annotation.type.SubImage": SubImage,
     "org.texttechnologylab.annotation.type.SubImageWithCaptions": SubImageWithCaptions,
     "org.texttechnologylab.annotation.type.Substance": Substance_annotation_type_Substance,
-    "org.texttechnologylab.annotation.type.Taxon": Taxon_annotation_type_Taxon,
+    "org.texttechnologylab.annotation.type.Taxon": Taxon,
     "org.texttechnologylab.annotation.type.TextElement": TextElement,
     "org.texttechnologylab.annotation.type.TextTechnologyEntity": TextTechnologyEntity,
     "org.texttechnologylab.annotation.type.TextTechnologyKnowledgeEdge": TextTechnologyKnowledgeEdge,
@@ -1196,7 +1198,7 @@ __all__ = [
     "SubImage",
     "SubImageWithCaptions",
     "Substance_annotation_type_Substance",
-    "Taxon_annotation_type_Taxon",
+    "Taxon",
     "TextElement",
     "TextTechnologyEntity",
     "TextTechnologyKnowledgeEdge",

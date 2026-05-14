@@ -1,24 +1,72 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 from collections import Counter
 from time import time
 
 from duui_py.annotator import DuuiAnnotator
+from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.models import AnnotatorMetaData, DocumentModification, V1RequestEnvelope, DuuiResult
-from duui_py.models.uima import Annotation, FeatureStructure, sofa_text_value
+from duui_py.logging import get_event_logger_or_none, log_errors
+from duui_py.models import (
+    AnnotatorConfig,
+    AnnotatorDescriptor,
+    AnnotatorMeta,
+    AnnotatorMetaData,
+    DocumentModification,
+    Domain,
+    DomainSpec,
+    IODescriptor,
+    V1RequestEnvelope,
+)
+from duui_py.models.uima import FeatureStructure, sofa_text_value
+from duui_py.models.uima_typesystem.texttechnologylab.annotation.types import EssayScore
 
 DIV_TYPE = "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Div"
-ESSAY_SCORE_TYPE = "org.texttechnologylab.annotation.EssayScore"
 
 
-class EssayScore(Annotation):
-    type: str = ESSAY_SCORE_TYPE
-
-
-class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
-    config_path = "annotator_config.json"
+class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
+    config = AnnotatorConfig(
+        meta=AnnotatorMeta(meta={"example": "duui-llm-essay-scorer migration"}),
+        descriptor=AnnotatorDescriptor(
+            name="essay-scorer-msgpack-lua",
+            version="1.0.0",
+            input=IODescriptor(
+                text=DomainSpec(
+                    default=Domain(
+                        mimeType="text/plain; charset=utf-8",
+                        languages=["x-unspecified"],
+                    )
+                ),
+                annotation=DomainSpec(
+                    default=Domain(
+                        mimeType="application/x-uima-annotation-spans",
+                        languages=["x-unspecified"],
+                        types={"Span": [DIV_TYPE]},
+                    )
+                ),
+            ),
+            output=IODescriptor(
+                types={"EssayScore": ["org.texttechnologylab.annotation.EssayScore"]},
+                text=DomainSpec(
+                    default=Domain(
+                        mimeType="text/plain; charset=utf-8",
+                        languages=["x-unspecified"],
+                    )
+                ),
+            ),
+        ),
+        typesystem_xml_path="TypeSystemEssayScorer.xml",
+        parameters_schema={
+            "name_model": {
+                "type": "string",
+                "default": "heuristic-essay-scorer",
+                "description": "Model label added to metadata.",
+            }
+        },
+    )
 
     def codec(self) -> MsgPackLuaCodec:
         return MsgPackLuaCodec(self.config)
@@ -36,9 +84,18 @@ class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
         reason = f"length_factor={length_factor:.3f}, uniq_ratio={uniq_ratio:.3f}, cohesion={cohesion:.3f}"
         return score, reason
 
-    async def process(self, doc: V1RequestEnvelope) -> DuuiResult:
+    @log_errors(recovery_suggestion="Check essay spans, sofa text, and model parameters.")
+    async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
+        started = time()
+        logger = get_event_logger_or_none()
         text = sofa_text_value(doc.sofa) or ""
         model_label = str(doc.parameters.get("name_model") or "heuristic-essay-scorer")
+        if logger:
+            await logger.info(
+                "Essay scorer processing started",
+                {"characters": len(text), "model": model_label, "incoming_fs": len(doc.fs)},
+            )
+            await logger.debug("Essay scorer parameters resolved", {"parameters": dict(doc.parameters)})
 
         divs = [
             fs
@@ -49,39 +106,43 @@ class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
         if not divs and text:
             divs = [FeatureStructure(type=DIV_TYPE, begin=0, end=len(text), features={"id": "full-document"})]
 
-        annotations: list[EssayScore] = []
+        scores = 0
         for div in divs:
             covered = text[div.begin : div.end] if text else ""
             score, reason = self._heuristic_score(covered)
             div_id = str(div.features.get("id") or "full-document")
-            annotations.append(
-                EssayScore(
-                    begin=div.begin,
-                    end=div.end,
-                    features={
-                        "value": score,
-                        "name": "EssayScore",
-                        "reason": reason,
-                        "inputAnswer": div_id,
-                        "NameModel": model_label,
-                    },
-                )
+            scores += 1
+            yield EssayScore(
+                        begin=div.begin,
+                        end=div.end,
+                        Value=score,
+                        Name="EssayScore",
+                        Reason=reason,
+                        features={
+                            "inputAnswer": div_id,
+                            "NameModel": model_label,
+                        },
             )
 
-        return DuuiResult(
-            annotations=annotations,
-            meta=AnnotatorMetaData(
+        elapsed_ms = int((time() - started) * 1000)
+        if logger:
+            await logger.metric("processing", "essay_spans_scored", scores, "count", elapsed_ms)
+            await logger.info(
+                "Essay scorer processing completed",
+                {"scores": scores, "elapsed_ms": elapsed_ms},
+            )
+
+        yield AnnotatorMetaData(
                 name=self.config.descriptor.name,
                 version=self.config.descriptor.version,
                 modelName=model_label,
                 modelVersion="1",
-            ),
-            modification_meta=DocumentModification(
+        )
+        yield DocumentModification(
                 user=self.config.descriptor.name,
                 timestamp=int(time()),
                 comment=f"{self.config.descriptor.name} heuristic essay scoring",
-            ),
         )
 
 
-app = create_app(EssayScorerAnnotator)
+app = create_app(EssayScorerAnnotator, request_adapter=AsyncChunkedRequestAdapter())

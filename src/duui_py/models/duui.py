@@ -25,3 +25,7 @@ class DuuiResult(BaseModel):
     meta: Optional[AnnotatorMetaData] = None
     modification_meta: Optional[DocumentModification] = None
     errors: list[str] = Field(default_factory=list)
+
+
+class DuuiError(BaseModel):
+    message: str

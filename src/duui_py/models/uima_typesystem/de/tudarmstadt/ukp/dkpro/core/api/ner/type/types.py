@@ -72,7 +72,7 @@ class Law(FeatureStructure):
     identifier: Optional[str] = None
     value: Optional[str] = None
 
-class Location(FeatureStructure):
+class Location(Annotation):
     type: str = "de.tudarmstadt.ukp.dkpro.core.api.ner.type.Location"
     identifier: Optional[str] = None
     value: Optional[str] = None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import sys
 import traceback
 from contextlib import contextmanager
@@ -34,6 +35,22 @@ def log_errors(
         Decorated function
     """
     def decorator(func: F) -> F:
+        @functools.wraps(func)
+        async def async_generator_wrapper(*args: Any, **kwargs: Any) -> Any:
+            try:
+                async for item in func(*args, **kwargs):
+                    yield item
+            except Exception as e:
+                await _log_exception(
+                    e,
+                    func.__name__,
+                    log_level,
+                    include_stack_trace,
+                    recovery_suggestion,
+                    extra_context,
+                )
+                raise
+
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
@@ -69,6 +86,8 @@ def log_errors(
                 raise
         
         # Return appropriate wrapper based on whether function is async
+        if inspect.isasyncgenfunction(func):
+            return async_generator_wrapper  # type: ignore
         if asyncio.iscoroutinefunction(func):
             return async_wrapper  # type: ignore
         else:
@@ -86,7 +105,10 @@ async def _log_exception(
     extra_context: Optional[Dict[str, Any]],
 ) -> None:
     """Log an exception as an error event."""
-    logger = get_event_logger()
+    try:
+        logger = get_event_logger()
+    except RuntimeError:
+        return
     
     stack_trace = None
     if include_stack_trace:

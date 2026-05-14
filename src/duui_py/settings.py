@@ -8,8 +8,6 @@ _settings_initialized = False
 
 def set_settings_once(settings: FrameworkSettings) -> None:
     global _settings, _settings_initialized
-    if _settings_initialized:
-        raise RuntimeError("framework settings already initialized for this process")
     _settings = settings
     _settings_initialized = True
 

@@ -306,6 +306,11 @@ def get_event_logger() -> EventLogger:
     return _logger_instance
 
 
+def get_event_logger_or_none() -> Optional[EventLogger]:
+    """Get the global event logger instance when logging is configured."""
+    return _logger_instance
+
+
 def configure_logger(
     sinks: Optional[List[EventSink]] = None,
     default_context: Optional[Dict[str, str]] = None,
@@ -314,9 +319,6 @@ def configure_logger(
 ) -> EventLogger:
     """Configure the global event logger."""
     global _logger_instance
-    
-    if _logger_instance is not None:
-        raise RuntimeError("Event logger already configured")
     
     _logger_instance = EventLogger(
         sinks=sinks,

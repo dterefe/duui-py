@@ -1,130 +1,110 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <typeSystemDescription xmlns="http://uima.apache.org/resourceSpecifier">
+
+    <name>TypeSystemFactChecking</name>
+
+    <description/>
+
+    <version>1.0</version>
+
+    <vendor/>
+
+    <imports>
+
+        <import name="desc.type.TextTechnologyAnnotation"/>
+
+        <import name="desc.type.TypeSystemModelMeta"/>
+
+
+    </imports>
     <types>
         <typeDescription>
-            <name>org.texttechnologylab.annotation.AnnotatorMetaData</name>
-            <description/>
-            <supertypeName>uima.cas.AnnotationBase</supertypeName>
-            <features>
-                <featureDescription>
-                    <name>reference</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.TOP</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
-                    <name>name</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.String</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
-                    <name>version</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.String</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
-                    <name>modelName</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.String</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
-                    <name>modelVersion</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.String</rangeTypeName>
-                </featureDescription>
-            </features>
-        </typeDescription>
-        <typeDescription>
-            <name>uima.tcas.DocumentAnnotation</name>
-            <description/>
+            <name>org.texttechnologylab.annotation.Argument</name>
+            <description>
+                Argument
+            </description>
             <supertypeName>uima.tcas.Annotation</supertypeName>
             <features>
                 <featureDescription>
-                    <name>language</name>
-                    <description/>
+
+                    <name>topic</name>
+
+                    <description>Topic which is related to topic</description>
+
                     <rangeTypeName>uima.cas.String</rangeTypeName>
+
+                </featureDescription>
+
+                <featureDescription>
+
+                    <name>Arguments</name>
+
+                    <description>Set of Argument with key and Value</description>
+
+                    <rangeTypeName>uima.cas.FSArray</rangeTypeName>
+
+                    <elementType>org.texttechnologylab.annotation.AnnotationComment</elementType>
+
+                </featureDescription>
+
+                <featureDescription>
+
+                    <name>reason</name>
+
+                    <description>reason for the output if its provided</description>
+
+                    <rangeTypeName>uima.cas.String</rangeTypeName>
+
+                </featureDescription>
+
+                <featureDescription>
+
+                    <name>model</name>
+
+                    <description/>
+
+                    <rangeTypeName>org.texttechnologylab.annotation.model.MetaData</rangeTypeName>
+
                 </featureDescription>
             </features>
         </typeDescription>
+
         <typeDescription>
-            <name>org.texttechnologylab.annotation.DocumentModification</name>
-            <description/>
-            <supertypeName>uima.cas.AnnotationBase</supertypeName>
-            <features>
-                <featureDescription>
-                    <name>user</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.String</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
-                    <name>timestamp</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.Long</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
-                    <name>comment</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.String</rangeTypeName>
-                </featureDescription>
-            </features>
-        </typeDescription>
-        <typeDescription>
-            <name>org.hucompute.textimager.uima.type.Sentiment</name>
-            <description/>
+            <name>org.texttechnologylab.annotation.ArgumentExtraction</name>
+            <description>
+                Argument
+            </description>
             <supertypeName>uima.tcas.Annotation</supertypeName>
             <features>
                 <featureDescription>
-                    <name>sentiment</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.Double</rangeTypeName>
+
+                    <name>reason</name>
+
+                    <description>reason for the output if its provided</description>
+
+                    <rangeTypeName>uima.cas.String</rangeTypeName>
+
                 </featureDescription>
+
                 <featureDescription>
-                    <name>subjectivity</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.Double</rangeTypeName>
-                </featureDescription>
-            </features>
-        </typeDescription>
-        <typeDescription>
-            <name>org.hucompute.textimager.uima.type.CategorizedSentiment</name>
-            <description/>
-            <supertypeName>org.hucompute.textimager.uima.type.Sentiment</supertypeName>
-            <features>
-                <featureDescription>
-                    <name>pos</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.Double</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
-                    <name>neu</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.Double</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
-                    <name>neg</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.Double</rangeTypeName>
-                </featureDescription>
-            </features>
-        </typeDescription>
-        <typeDescription>
-            <name>org.texttechnologylab.annotation.AnnotationComment</name>
-            <description/>
-            <supertypeName>uima.cas.AnnotationBase</supertypeName>
-            <features>
-                <featureDescription>
-                    <name>reference</name>
-                    <description/>
-                    <rangeTypeName>uima.cas.TOP</rangeTypeName>
-                </featureDescription>
-                <featureDescription>
+
                     <name>value</name>
-                    <description/>
+
+                    <description>output of the model</description>
+
                     <rangeTypeName>uima.cas.String</rangeTypeName>
+
                 </featureDescription>
+
+
                 <featureDescription>
-                    <name>key</name>
+
+                    <name>model</name>
+
                     <description/>
-                    <rangeTypeName>uima.cas.String</rangeTypeName>
+
+                    <rangeTypeName>org.texttechnologylab.annotation.model.MetaData</rangeTypeName>
+
                 </featureDescription>
             </features>
         </typeDescription>

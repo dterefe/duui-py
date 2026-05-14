@@ -7,14 +7,14 @@ from typing import Any, Generic, TypeVar
 from pydantic import BaseModel, Field
 
 from duui_py.codecs.base import Codec
-from duui_py.models import AnnotatorConfig, DuuiResult, load_annotator_config
+from duui_py.models import AnnotatorConfig, load_annotator_config
 from duui_py.models.uima import FeatureStructure
 from duui_py.models.uima import SoFaBytes, SoFaText, SoFaURI, SoFaAnnotationSpans
 
 RequestT = TypeVar("RequestT")
 ResponseT = TypeVar("ResponseT")
 PayloadT = TypeVar("PayloadT", bound="V1Payload")
-ResultT = TypeVar("ResultT", bound=DuuiResult)
+ResultT = TypeVar("ResultT")
 
 
 class V1Payload(BaseModel):
@@ -75,23 +75,23 @@ class V1Process(DUUIProcess[PayloadT, ResultT], ABC):
         raise NotImplementedError("process_spans not implemented")
 
 
-class V1AsyncProcess(V1Process[PayloadT, DuuiResult], ABC):
+class V1AsyncProcess(V1Process[PayloadT, Any], ABC):
     async def process_text(
         self, sofa: SoFaText, payload: PayloadT, parameters: dict[str, Any]
-    ) -> AsyncIterable[DuuiResult]:
+    ) -> AsyncIterable[Any]:
         raise NotImplementedError("process_text not implemented")
 
     async def process_bytes(
         self, sofa: SoFaBytes, payload: PayloadT, parameters: dict[str, Any]
-    ) -> AsyncIterable[DuuiResult]:
+    ) -> AsyncIterable[Any]:
         raise NotImplementedError("process_bytes not implemented")
 
     async def process_uri(
         self, sofa: SoFaURI, payload: PayloadT, parameters: dict[str, Any]
-    ) -> AsyncIterable[DuuiResult]:
+    ) -> AsyncIterable[Any]:
         raise NotImplementedError("process_uri not implemented")
 
     async def process_spans(
         self, sofa: SoFaAnnotationSpans, payload: PayloadT, parameters: dict[str, Any]
-    ) -> AsyncIterable[DuuiResult]:
+    ) -> AsyncIterable[Any]:
         raise NotImplementedError("process_spans not implemented")

@@ -411,9 +411,6 @@ def configure_metric_collector(
     """Configure the global metric collector."""
     global _metric_collector_instance
     
-    if _metric_collector_instance is not None:
-        raise RuntimeError("Metric collector already configured")
-    
     _metric_collector_instance = MetricCollector(
         collection_interval_seconds=collection_interval_seconds,
         include_process_metrics=include_process_metrics,
