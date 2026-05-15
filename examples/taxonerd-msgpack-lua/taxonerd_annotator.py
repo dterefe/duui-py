@@ -10,7 +10,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.logging import get_event_logger_or_none, log_errors
+from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
     AnnotatorDescriptor,
@@ -75,23 +75,12 @@ class TaxoNERDAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
     def codec(self) -> MsgPackLuaCodec:
         return MsgPackLuaCodec(self.config)
 
-    @log_errors(recovery_suggestion="Check the incoming sofa text and TaxoNERD parameters.")
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
         started = time()
-        logger = get_event_logger_or_none()
         text = sofa_text_value(doc.sofa) or ""
         linking = str(doc.parameters.get("linking") or "gbif_backbone")
         threshold = float(doc.parameters.get("threshold") or 0.7)
         model = str(doc.parameters.get("model") or "en_ner_eco_md")
-        if logger:
-            await logger.info(
-                "TaxoNERD processing started",
-                {"characters": len(text), "linking": linking, "threshold": threshold, "model": model},
-            )
-            await logger.debug(
-                "TaxoNERD regex scan configured",
-                {"pattern": BINOMIAL_PATTERN.pattern, "parameters": dict(doc.parameters)},
-            )
 
         matches = 0
         for match in BINOMIAL_PATTERN.finditer(text):
@@ -111,12 +100,8 @@ class TaxoNERDAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             )
 
         elapsed_ms = int((time() - started) * 1000)
-        if logger:
-            await logger.metric("processing", "taxonerd_taxon_matches", matches, "count", elapsed_ms)
-            await logger.info(
-                "TaxoNERD processing completed",
-                {"matches": matches, "elapsed_ms": elapsed_ms},
-            )
+        await metrics.count("taxonerd_taxon_matches", matches, linking=linking, model=model)
+        await metrics.timing("taxonerd_processing_ms", elapsed_ms)
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

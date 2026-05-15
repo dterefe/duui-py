@@ -294,7 +294,7 @@ class MsgPackLuaCodec(Codec[V1RequestEnvelope, DuuiResult]):
         if isinstance(item, DuuiResult):
             return self._result_chunks(item)
         if isinstance(item, DuuiError):
-            return [(CHUNK_ERROR, msgpack.packb({"message": item.message}, use_bin_type=True))]
+            return [(CHUNK_ERROR, msgpack.packb(item.model_dump(exclude_none=True), use_bin_type=True))]
         if isinstance(item, str):
             return [(CHUNK_ERROR, msgpack.packb({"message": item}, use_bin_type=True))]
         if isinstance(item, SoFaBase):

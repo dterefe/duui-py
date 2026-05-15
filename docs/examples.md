@@ -2,6 +2,8 @@
 
 The examples are the contract for the currently documented framework surface.
 
+All current Python examples define config in code, use generated `MsgPackLuaCodec`, pass `AsyncChunkedRequestAdapter` to `create_app`, and yield existing UIMA model objects. They do not use custom Lua scripts.
+
 ## GNFinder
 
 Path:

@@ -2,7 +2,14 @@
 
 Python helpers for building DUUI V1 annotators.
 
-The current examples use one path: a FastAPI app created with `create_app`, an annotator class with Python config objects, generated MsgPack/Lua communication, and Python UIMA model classes from `duui_py.models.uima_typesystem`.
+The supported example path is deliberately small:
+
+- define the annotator descriptor directly in Python
+- expose the annotator with `create_app`
+- use generated `MsgPackLuaCodec` communication Lua
+- use `AsyncChunkedRequestAdapter` for example annotators
+- yield existing UIMA model objects from `duui_py.models.uima_typesystem`
+- stream logs, metrics, and errors through `GET /v2/events`
 
 ## Install
 
@@ -10,7 +17,7 @@ The current examples use one path: a FastAPI app created with `create_app`, an a
 pip install -e .
 ```
 
-Run an example:
+## Run An Example
 
 ```bash
 cd examples/gnfinder-msgpack-lua
@@ -24,20 +31,23 @@ GET  /v1/documentation
 GET  /v1/typesystem
 GET  /v1/communication_layer
 POST /v1/process
+GET  /v2/events
 ```
 
 ## Documentation
 
 - [Annotators and Apps](docs/annotators.md)
+- [Adapters and Processing](docs/adapters.md)
 - [Python Config Objects](docs/config.md)
 - [Generated MsgPack/Lua Codec](docs/msgpack-lua.md)
+- [Custom Lua Codec](docs/custom-lua.md)
 - [UIMA Models and Type Systems](docs/uima-models.md)
-- [Logging, Metrics, and Errors](docs/logging-errors-metrics.md)
+- [Events, Logging, Metrics, and Errors](docs/events.md)
 - [Example Annotators](docs/examples.md)
 
-## Examples
+## Tested Examples
 
-Text examples currently covered by the DUUI Java harness:
+Text examples covered by the DUUI Java harness:
 
 - `examples/gnfinder-msgpack-lua`
 - `examples/taxonerd-msgpack-lua`
@@ -47,17 +57,17 @@ Text examples currently covered by the DUUI Java harness:
 - `examples/spacy-lua-msgpack`
 - `examples/geonames-msgpack-lua`
 
-The non-text `whisper-msgpack-lua` example uses the same app/config/codec path, but processes byte SofA input.
+`examples/whisper-msgpack-lua` uses the same app/config/codec path, but consumes byte SofA input.
 
 ## Development Checks
 
 ```bash
 python -m compileall -q src examples
-python -m pytest -q test_msgpack_lua.py test_simple.py test_whisper_v1_async_process.py
+python -m pytest -q
 ```
 
-The Java integration harness lives in:
+Java integration tests live in:
 
 ```text
-../DockerUnifiedUIMAInterface/src/test/java/org/texttechnologylab/duui/rework/DUUIDuuiPyTextExamplesIntegrationTest.java
+../DockerUnifiedUIMAInterface/src/test/java/org/texttechnologylab/duui/rework
 ```

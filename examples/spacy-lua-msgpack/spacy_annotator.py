@@ -11,7 +11,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.logging import get_event_logger_or_none, log_errors
+from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
     AnnotatorDescriptor,
@@ -97,18 +97,10 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
     def codec(self) -> MsgPackLuaCodec:
         return MsgPackLuaCodec(self.config)
 
-    @log_errors(recovery_suggestion="Check sofa text, spaCy model availability, and model_name parameter.")
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
         started = time()
-        logger = get_event_logger_or_none()
         text = sofa_text_value(doc.sofa) or ""
         model_name = str(doc.parameters.get("model_name") or "en_core_web_sm")
-        if logger:
-            await logger.info(
-                "spaCy processing started",
-                {"characters": len(text), "requested_model": model_name},
-            )
-            await logger.debug("spaCy parameters resolved", {"parameters": dict(doc.parameters)})
 
         generated, model_version = self._try_spacy(text, model_name)
         engine = "spacy"
@@ -126,18 +118,10 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             yield annotation
 
         elapsed_ms = int((time() - started) * 1000)
-        if logger:
-            await logger.metric("processing", "spacy_annotations", total, "count", elapsed_ms)
-            await logger.info(
-                "spaCy processing completed",
-                {
-                    "engine": engine,
-                    "model": model_name,
-                    "annotations": total,
-                    "annotation_types": counts,
-                    "elapsed_ms": elapsed_ms,
-                },
-            )
+        await metrics.count("spacy_annotations", total, engine=engine, model=model_name)
+        for annotation_type, count in counts.items():
+            await metrics.count("spacy_annotations_by_type", count, type=annotation_type)
+        await metrics.timing("spacy_processing_ms", elapsed_ms)
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

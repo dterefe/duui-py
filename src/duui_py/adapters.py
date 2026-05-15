@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from duui_py.annotator import DuuiAnnotator, V1AsyncProcess, V1Payload, V1Process
 from duui_py.codecs.base import Codec
+from duui_py.errors import DuuiHttpError, log_duui_error, wrap_exception
 from duui_py.models import AnnotatorConfig, DuuiError, DuuiResult, V1RequestEnvelope
 from duui_py.models.uima import Annotation, FeatureStructure, SoFa, SoFaAnnotationSpans, SoFaBase, sofa_kind
 from duui_py.models.uima_typesystem.texttechnologylab.annotation.types import AnnotatorMetaData, DocumentModification
@@ -61,6 +62,18 @@ def _merge_output_item(base: DuuiResult, item: Any) -> DuuiResult:
     else:
         raise HTTPException(status_code=500, detail=f"unsupported annotator output item: {type(item).__name__}")
     return base
+
+
+async def _exception_to_error_item(exc: BaseException, *, operation: str) -> DuuiError:
+    if isinstance(exc, DuuiHttpError):
+        error = exc
+    elif isinstance(exc, HTTPException):
+        detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+        error = DuuiHttpError(exc.status_code, detail)
+    else:
+        error = wrap_exception(exc)
+    await log_duui_error(error, operation=operation)
+    return error.to_duui_error()
 
 
 def _iter_descriptor_mimes(io_desc: Any) -> list[str]:
@@ -208,21 +221,30 @@ async def _process_v1_or_simple(
 
     if isinstance(annotator, V1Process):
         merged = DuuiResult()
-        async for item in _invoke_v1(cast(V1Process[Any, DuuiResult], annotator), doc, cfg.descriptor.input):
-            _validate_output_item_mime(cfg, item)
-            _merge_output_item(merged, item)
+        try:
+            async for item in _invoke_v1(cast(V1Process[Any, DuuiResult], annotator), doc, cfg.descriptor.input):
+                _validate_output_item_mime(cfg, item)
+                _merge_output_item(merged, item)
+        except Exception as exc:  # noqa: BLE001
+            _merge_output_item(merged, await _exception_to_error_item(exc, operation="process"))
         _validate_output_mime(cfg, merged)
         return merged
 
     returned = annotator.process(doc)
     if hasattr(returned, "__aiter__"):
         merged = DuuiResult()
-        async for item in cast(AsyncIterable[Any], returned):
-            _validate_output_item_mime(cfg, item)
-            _merge_output_item(merged, item)
+        try:
+            async for item in cast(AsyncIterable[Any], returned):
+                _validate_output_item_mime(cfg, item)
+                _merge_output_item(merged, item)
+        except Exception as exc:  # noqa: BLE001
+            _merge_output_item(merged, await _exception_to_error_item(exc, operation="process"))
         return merged
 
-    result = await returned
+    try:
+        result = await returned
+    except Exception as exc:  # noqa: BLE001
+        return DuuiResult(errors=[(await _exception_to_error_item(exc, operation="process")).message])
     if isinstance(result, DuuiResult):
         _validate_output_mime(cfg, result)
         return result
@@ -239,19 +261,29 @@ async def _iter_v1_or_simple(
         _resolve_domain_alias_for_sofa(cfg.descriptor.input, doc.sofa)
 
     if isinstance(annotator, V1Process):
-        async for item in _invoke_v1(cast(V1Process[Any, DuuiResult], annotator), doc, cfg.descriptor.input):
-            _validate_output_item_mime(cfg, item)
-            yield item
+        try:
+            async for item in _invoke_v1(cast(V1Process[Any, DuuiResult], annotator), doc, cfg.descriptor.input):
+                _validate_output_item_mime(cfg, item)
+                yield item
+        except Exception as exc:  # noqa: BLE001
+            yield await _exception_to_error_item(exc, operation="process")
         return
 
     returned = annotator.process(doc)
     if hasattr(returned, "__aiter__"):
-        async for item in cast(AsyncIterable[Any], returned):
-            _validate_output_item_mime(cfg, item)
-            yield item
+        try:
+            async for item in cast(AsyncIterable[Any], returned):
+                _validate_output_item_mime(cfg, item)
+                yield item
+        except Exception as exc:  # noqa: BLE001
+            yield await _exception_to_error_item(exc, operation="process")
         return
 
-    result = await returned
+    try:
+        result = await returned
+    except Exception as exc:  # noqa: BLE001
+        yield await _exception_to_error_item(exc, operation="process")
+        return
     if isinstance(result, DuuiResult):
         _validate_output_mime(cfg, result)
         yield result

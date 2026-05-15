@@ -29,3 +29,8 @@ class DuuiResult(BaseModel):
 
 class DuuiError(BaseModel):
     message: str
+    status: int = 500
+    title: str | None = None
+    retryable: bool = False
+    retry_after: int | None = None
+    detail: dict[str, Any] = Field(default_factory=dict)

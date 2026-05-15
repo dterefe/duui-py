@@ -9,7 +9,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.logging import get_event_logger_or_none, log_errors
+from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
     AnnotatorDescriptor,
@@ -84,18 +84,10 @@ class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         reason = f"length_factor={length_factor:.3f}, uniq_ratio={uniq_ratio:.3f}, cohesion={cohesion:.3f}"
         return score, reason
 
-    @log_errors(recovery_suggestion="Check essay spans, sofa text, and model parameters.")
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
         started = time()
-        logger = get_event_logger_or_none()
         text = sofa_text_value(doc.sofa) or ""
         model_label = str(doc.parameters.get("name_model") or "heuristic-essay-scorer")
-        if logger:
-            await logger.info(
-                "Essay scorer processing started",
-                {"characters": len(text), "model": model_label, "incoming_fs": len(doc.fs)},
-            )
-            await logger.debug("Essay scorer parameters resolved", {"parameters": dict(doc.parameters)})
 
         divs = [
             fs
@@ -125,12 +117,8 @@ class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             )
 
         elapsed_ms = int((time() - started) * 1000)
-        if logger:
-            await logger.metric("processing", "essay_spans_scored", scores, "count", elapsed_ms)
-            await logger.info(
-                "Essay scorer processing completed",
-                {"scores": scores, "elapsed_ms": elapsed_ms},
-            )
+        await metrics.count("essay_spans_scored", scores, model=model_label)
+        await metrics.timing("essay_processing_ms", elapsed_ms)
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

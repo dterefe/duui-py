@@ -11,7 +11,8 @@ from duui_py.annotator import DuuiAnnotator, V1AsyncProcess, V1Payload
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.logging import get_event_logger_or_none, log_errors
+from duui_py.errors import unavailable, unprocessable
+from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
     AnnotatorDescriptor,
@@ -20,7 +21,6 @@ from duui_py.models import (
     DocumentModification,
     Domain,
     DomainSpec,
-    DuuiError,
     IODescriptor,
 )
 from duui_py.models.uima import SoFaBytes
@@ -76,7 +76,6 @@ class WhisperAnnotator(DuuiAnnotator[object, object], V1AsyncProcess[V1Payload])
     def codec(self) -> MsgPackLuaCodec:
         return MsgPackLuaCodec(self.config)
 
-    @log_errors(recovery_suggestion="Whisper pass-through process received an invalid DUUI result.")
     async def process(self, doc: object) -> object:
         return doc
 
@@ -85,36 +84,17 @@ class WhisperAnnotator(DuuiAnnotator[object, object], V1AsyncProcess[V1Payload])
     ) -> AsyncIterable[object]:
         del payload
         started = time()
-        logger = get_event_logger_or_none()
         model_name = str(parameters.get("model_name") or "base")
         use_dummy = str(parameters.get("use_dummy") or "").lower() in {"1", "true", "yes", "on"}
         audio_bytes = bytes(sofa.bytes)
-        if logger:
-            await logger.info(
-                "Whisper processing started",
-                {"bytes": len(audio_bytes), "model": model_name, "use_dummy": use_dummy},
-            )
-            await logger.debug("Whisper parameters resolved", {"parameters": dict(parameters)})
 
         if not audio_bytes:
-            if logger:
-                await logger.error_event(
-                    error_type="EmptyAudioPayload",
-                    message="No audio payload found in Sofa bytes.",
-                    recovery_suggestion="Send a non-empty byte sofa.",
-                    extra={"model": model_name},
-                )
-            yield DuuiError(message="No audio payload found in Sofa bytes.")
-            return
+            unprocessable("No audio payload found in Sofa bytes.", model=model_name)
 
         if use_dummy:
             elapsed_ms = int((time() - started) * 1000)
-            if logger:
-                await logger.metric("processing", "whisper_audio_tokens", 1, "count", elapsed_ms)
-                await logger.info(
-                    "Whisper processing completed",
-                    {"mode": "dummy", "tokens": 1, "elapsed_ms": elapsed_ms},
-                )
+            await metrics.count("whisper_audio_tokens", 1, mode="dummy", model=model_name)
+            await metrics.timing("whisper_processing_ms", elapsed_ms, mode="dummy")
             yield AudioToken(begin=0, end=0, timeStart=0.0, timeEnd=0.0, value=f"dummy-bytes-{len(audio_bytes)}")
             yield AnnotatorMetaData(
                     name=self.config.descriptor.name,
@@ -132,15 +112,7 @@ class WhisperAnnotator(DuuiAnnotator[object, object], V1AsyncProcess[V1Payload])
         try:
             model = _load_whisper_model(model_name)
         except Exception as exc:  # noqa: BLE001
-            if logger:
-                await logger.error_event(
-                    error_type=type(exc).__name__,
-                    message=f"Whisper model load failed ({model_name}): {exc}",
-                    recovery_suggestion="Install whisper and ensure the requested model is available.",
-                    extra={"model": model_name},
-                )
-            yield DuuiError(message=f"Whisper model load failed ({model_name}): {exc}")
-            return
+            unavailable(f"Whisper model load failed ({model_name}): {exc}", model=model_name)
 
         token_count = 0
         try:
@@ -163,23 +135,11 @@ class WhisperAnnotator(DuuiAnnotator[object, object], V1AsyncProcess[V1Payload])
                     value=text,
                 )
         except Exception as exc:  # noqa: BLE001
-            if logger:
-                await logger.error_event(
-                    error_type=type(exc).__name__,
-                    message=f"Whisper transcribe failed: {exc}",
-                    recovery_suggestion="Check that the byte payload is valid audio for Whisper.",
-                    extra={"model": model_name},
-                )
-            yield DuuiError(message=f"Whisper transcribe failed: {exc}")
-            return
+            unprocessable(f"Whisper transcribe failed: {exc}", model=model_name)
 
         elapsed_ms = int((time() - started) * 1000)
-        if logger:
-            await logger.metric("processing", "whisper_audio_tokens", token_count, "count", elapsed_ms)
-            await logger.info(
-                "Whisper processing completed",
-                {"mode": "whisper", "tokens": token_count, "elapsed_ms": elapsed_ms},
-            )
+        await metrics.count("whisper_audio_tokens", token_count, mode="whisper", model=model_name)
+        await metrics.timing("whisper_processing_ms", elapsed_ms, mode="whisper")
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

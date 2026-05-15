@@ -1,23 +1,28 @@
-# Argument Classification (duui-py migration)
+# Argument Classification
 
-This is a full annotator-style migration folder including runtime and container scaffolding.
+DUUI V1 text example using Python-native config, generated `MsgPackLuaCodec`, and `AsyncChunkedRequestAdapter`.
 
 ## Files
-- argument_annotator.py annotator implementation
-- annotator_config.json DUUI descriptor + params + settings
-- TypeSystem*.xml UIMA type system
-- requirements.txt runtime dependencies
-- pyproject.toml package metadata
-- Dockerfile container image build
-- start.sh local startup helper
 
-## Local run
-Run from the example directory:
+- `argument_annotator.py` - annotator implementation and config
+- `TypeSystem*.xml` - UIMA type system
+- `requirements.txt` - runtime dependencies
+- `Dockerfile` - container image build
+- `start.sh` - local startup helper
 
+## Run
+
+```bash
 ./start.sh
+```
 
-## Docker build/run
-Build from repo root:
+## Output
 
-docker build -f examples/argument-msgpack-lua/Dockerfile -t argument-msgpack-lua:latest .
-docker run --rm -p 9714:9714 argument-msgpack-lua:latest
+The annotator yields existing UIMA model objects:
+
+```text
+org.texttechnologylab.annotation.Argument
+org.texttechnologylab.annotation.AnnotationComment
+org.texttechnologylab.annotation.AnnotatorMetaData
+org.texttechnologylab.annotation.DocumentModification
+```

@@ -12,7 +12,8 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.logging import get_event_logger_or_none, log_errors
+from duui_py.errors import bad_gateway, unavailable, unprocessable
+from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
     AnnotatorDescriptor,
@@ -22,7 +23,6 @@ from duui_py.models import (
     Domain,
     DomainSpec,
     IODescriptor,
-    DuuiError,
     V1RequestEnvelope,
 )
 from duui_py.models.uima import sofa_text_value
@@ -131,13 +131,11 @@ class GeoNamesAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         with urlopen(request, timeout=120) as response:
             decoded = json.loads(response.read().decode("utf-8"))
         if not isinstance(decoded, dict):
-            raise ValueError("GeoNames backend returned a non-object JSON response")
+            bad_gateway("GeoNames backend returned a non-object JSON response", backend_url=backend_url)
         return decoded
 
-    @log_errors(recovery_suggestion="Check Location annotations and GeoNames matching parameters.")
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
         started = time()
-        logger = get_event_logger_or_none()
         text = sofa_text_value(doc.sofa) or ""
         annotation_type = str(doc.parameters.get("annotation_type") or LOCATION_TYPE)
         mode = str(doc.parameters.get("mode") or "find")
@@ -153,15 +151,10 @@ class GeoNamesAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         ]
 
         if backend_url is None:
-            message = "GeoNames backend URL is required via parameter 'backend_url' or GEONAMES_FST_URL."
-            if logger:
-                await logger.error_event(
-                    error_type="GeoNamesBackendMissing",
-                    message=message,
-                    recovery_suggestion="Start duui-geonames-fst and pass its URL as backend_url.",
-                )
-            yield DuuiError(message=message)
-            return
+            unprocessable(
+                "GeoNames backend URL is required via parameter 'backend_url' or GEONAMES_FST_URL.",
+                parameter="backend_url",
+            )
 
         queries = []
         references = []
@@ -185,17 +178,10 @@ class GeoNamesAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
 
         try:
             response = self._query_backend(backend_url, payload)
-        except (OSError, URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
-            message = f"GeoNames backend request failed: {exc}"
-            if logger:
-                await logger.error_event(
-                    error_type=type(exc).__name__,
-                    message=message,
-                    recovery_suggestion="Check backend_url and ensure the GeoNames FST service is reachable.",
-                    extra={"backend_url": backend_url},
-                )
-            yield DuuiError(message=message)
-            return
+        except (OSError, URLError, TimeoutError) as exc:
+            unavailable(f"GeoNames backend request failed: {exc}", backend_url=backend_url)
+        except json.JSONDecodeError as exc:
+            bad_gateway(f"GeoNames backend returned invalid JSON: {exc}", backend_url=backend_url)
 
         matches = 0
         for item in response.get("results", []):
@@ -230,25 +216,9 @@ class GeoNamesAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             )
 
         elapsed_ms = int((time() - started) * 1000)
-        if logger:
-            await logger.info(
-                "GeoNames request received",
-                {
-                    "characters": len(text),
-                    "incoming_fs": len(doc.fs),
-                    "locations": len(locations),
-                    "annotation_type": annotation_type,
-                    "mode": mode,
-                    "result_selection": result_selection,
-                    "backend_url": backend_url,
-                },
-            )
-            await logger.metric("processing", "geonames_locations_received", len(locations), "count", elapsed_ms)
-            await logger.metric("processing", "geonames_matches", matches, "count", elapsed_ms)
-            await logger.info(
-                "GeoNames processing completed",
-                {"matches": matches, "elapsed_ms": elapsed_ms},
-            )
+        await metrics.count("geonames_locations_received", len(locations), mode=mode, result_selection=result_selection)
+        await metrics.count("geonames_matches", matches, mode=mode, result_selection=result_selection)
+        await metrics.timing("geonames_processing_ms", elapsed_ms)
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

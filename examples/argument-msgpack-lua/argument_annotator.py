@@ -8,7 +8,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.logging import get_event_logger_or_none, log_errors
+from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
     AnnotatorDescriptor,
@@ -86,20 +86,12 @@ class ArgumentAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         reason = f"pos={pos}, neg={neg}, topic_hit={topic_hit}"
         return label, confidence, reason
 
-    @log_errors(recovery_suggestion="Check incoming text spans and argument parameters.")
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
         started = time()
-        logger = get_event_logger_or_none()
         topic = str(doc.parameters.get("topic") or "general")
         selection_types_raw = str(doc.parameters.get("selection_types") or "").strip()
         selection_types = {s.strip() for s in selection_types_raw.split(",") if s.strip()}
         text = sofa_text_value(doc.sofa) or ""
-        if logger:
-            await logger.info(
-                "Argument processing started",
-                {"characters": len(text), "topic": topic, "incoming_fs": len(doc.fs)},
-            )
-            await logger.debug("Argument parameters resolved", {"parameters": dict(doc.parameters)})
 
         spans = [
             fs
@@ -135,19 +127,10 @@ class ArgumentAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             )
 
         elapsed_ms = int((time() - started) * 1000)
-        if logger:
-            await logger.metric("processing", "argument_spans_scored", len(spans), "count", elapsed_ms)
-            await logger.metric("processing", "argument_annotations", annotations, "count", elapsed_ms)
-            await logger.metric("processing", "argument_feature_structures", feature_structures, "count", elapsed_ms)
-            await logger.info(
-                "Argument processing completed",
-                {
-                    "spans": len(spans),
-                    "annotations": annotations,
-                    "feature_structures": feature_structures,
-                    "elapsed_ms": elapsed_ms,
-                },
-            )
+        await metrics.count("argument_spans_scored", len(spans), topic=topic)
+        await metrics.count("argument_annotations", annotations, topic=topic)
+        await metrics.count("argument_feature_structures", feature_structures, topic=topic)
+        await metrics.timing("argument_processing_ms", elapsed_ms)
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

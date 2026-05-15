@@ -4,8 +4,9 @@ This migrates the `duui-geonames-fst` DUUI component shape to `duui-py`.
 
 The example consumes DKPro `Location` annotations and declares
 `org.texttechnologylab.annotation.geonames.GeoNamesEntity` output. It uses the
-framework `MsgPackLuaCodec`, so the Lua communication layer is generated from
-the Python annotator descriptor.
+framework `MsgPackLuaCodec` with `AsyncChunkedRequestAdapter`, so the Lua
+communication layer is generated from the Python annotator descriptor and the
+request/response path is chunked.
 
 This does not recreate GeoNames records in Python. It expects a running
 `duui-geonames-fst`-compatible backend via `backend_url` or `GEONAMES_FST_URL`,
@@ -23,5 +24,5 @@ component:
 
 ```bash
 cd examples/geonames-msgpack-lua
-uvicorn geonames_annotator:app --host 0.0.0.0 --port 9714
+PYTHONPATH=../../src uvicorn geonames_annotator:app --host 0.0.0.0 --port 9714
 ```

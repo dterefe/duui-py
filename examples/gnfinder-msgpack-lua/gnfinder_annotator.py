@@ -9,7 +9,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
-from duui_py.logging import get_event_logger_or_none, log_errors
+from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
     AnnotatorDescriptor,
@@ -74,23 +74,11 @@ class GNFinderAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
     def codec(self) -> MsgPackLuaCodec:
         return MsgPackLuaCodec(self.config)
 
-    @log_errors(recovery_suggestion="Check the incoming sofa text and GNFinder parameters.")
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
         started = time()
-        logger = get_event_logger_or_none()
         text = sofa_text_value(doc.sofa) or ""
         lang = str(doc.parameters.get("lang") or "detect")
         verify = bool(doc.parameters.get("verify", True))
-
-        if logger:
-            await logger.info(
-                "GNFinder processing started",
-                {"characters": len(text), "lang": lang, "verify": verify},
-            )
-            await logger.debug(
-                "GNFinder regex scan configured",
-                {"pattern": BINOMIAL_PATTERN.pattern, "parameters": dict(doc.parameters)},
-            )
 
         matches = 0
         for m in BINOMIAL_PATTERN.finditer(text):
@@ -124,12 +112,8 @@ class GNFinderAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 )
 
         elapsed_ms = int((time() - started) * 1000)
-        if logger:
-            await logger.metric("processing", "gnfinder_taxon_matches", matches, "count", elapsed_ms)
-            await logger.info(
-                "GNFinder processing completed",
-                {"matches": matches, "elapsed_ms": elapsed_ms},
-            )
+        await metrics.count("gnfinder_taxon_matches", matches, lang=lang, verify=str(verify).lower())
+        await metrics.timing("gnfinder_processing_ms", elapsed_ms)
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

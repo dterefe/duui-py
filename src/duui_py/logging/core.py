@@ -70,7 +70,6 @@ class ErrorEvent(Event):
     error_type: str
     message: str
     stack_trace: Optional[str] = None
-    recovery_suggestion: Optional[str] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -277,7 +276,6 @@ class EventLogger:
         error_type: str,
         message: str,
         stack_trace: Optional[str] = None,
-        recovery_suggestion: Optional[str] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log a structured error event."""
@@ -285,7 +283,6 @@ class EventLogger:
             error_type=error_type,
             message=message,
             stack_trace=stack_trace,
-            recovery_suggestion=recovery_suggestion,
             extra=extra or {},
             context=self._build_event_context(),
             annotator_config=self._build_annotator_config(),

@@ -1,23 +1,27 @@
-# TaxoNERD (duui-py migration)
+# TaxoNERD
 
-This is a full annotator-style migration folder including runtime and container scaffolding.
+DUUI V1 text example using Python-native config, generated `MsgPackLuaCodec`, and `AsyncChunkedRequestAdapter`.
 
 ## Files
-- taxonerd_annotator.py annotator implementation
-- annotator_config.json DUUI descriptor + params + settings
-- TypeSystem*.xml UIMA type system
-- requirements.txt runtime dependencies
-- pyproject.toml package metadata
-- Dockerfile container image build
-- start.sh local startup helper
 
-## Local run
-Run from the example directory:
+- `taxonerd_annotator.py` - annotator implementation and config
+- `TypeSystem*.xml` - UIMA type system
+- `requirements.txt` - runtime dependencies
+- `Dockerfile` - container image build
+- `start.sh` - local startup helper
 
+## Run
+
+```bash
 ./start.sh
+```
 
-## Docker build/run
-Build from repo root:
+## Output
 
-docker build -f examples/taxonerd-msgpack-lua/Dockerfile -t taxonerd-msgpack-lua:latest .
-docker run --rm -p 9714:9714 taxonerd-msgpack-lua:latest
+The annotator yields existing UIMA model objects:
+
+```text
+org.texttechnologylab.annotation.type.Taxon
+org.texttechnologylab.annotation.AnnotatorMetaData
+org.texttechnologylab.annotation.DocumentModification
+```

@@ -33,7 +33,6 @@ from .streaming import (
     StreamInfo,
 )
 from .metrics import MetricCollector, get_metric_collector, configure_metric_collector
-from .errors import log_errors, error_context, log_exception, log_error_message
 
 __all__ = [
     # Core events and logger
@@ -69,9 +68,4 @@ __all__ = [
     "MetricCollector",
     "get_metric_collector",
     "configure_metric_collector",
-    # Error handling
-    "log_errors",
-    "error_context",
-    "log_exception",
-    "log_error_message",
 ]

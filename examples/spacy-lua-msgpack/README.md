@@ -1,25 +1,38 @@
-# spaCy MsgPack Lua Example
+# spaCy
 
-This example uses the standard `MsgPackLuaCodec`. The Lua communication layer is generated from the annotator descriptor, so there is no handwritten Lua script to keep in sync.
+DUUI V1 text example using Python-native config, generated `MsgPackLuaCodec`, and `AsyncChunkedRequestAdapter`.
 
 The annotator uses spaCy when it is installed and falls back to deterministic lightweight token, sentence, lemma, POS, morphology, dependency, and named-entity annotations when spaCy is unavailable.
 
 ## Files
 
-- `spacy_annotator.py` - annotator implementation and in-code Python config
+- `spacy_annotator.py` - annotator implementation and config
 - `TypeSystemSpacy.xml` - UIMA type system
-- `annotator_config.json` - legacy reference config, not used by the Python example
 - `requirements.txt` - optional example dependencies
+- `Dockerfile` - container image build
+- `start.sh` - local startup helper
 
 ## Run
 
 ```bash
-cd examples/spacy-lua-msgpack
-uvicorn spacy_annotator:app --host 0.0.0.0 --port 9714
+./start.sh
 ```
 
 Optional spaCy model:
 
 ```bash
 python -m spacy download en_core_web_sm
+```
+
+## Output
+
+The annotator yields existing DKPro model objects:
+
+```text
+de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence
+de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token
+de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS
+de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity
+org.texttechnologylab.annotation.AnnotatorMetaData
+org.texttechnologylab.annotation.DocumentModification
 ```
