@@ -8,6 +8,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
+from duui_py.logging import get_event_logger_or_none
 from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
@@ -87,6 +88,13 @@ class SRLAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         started = time()
         text = sofa_text_value(doc.sofa) or ""
         max_links = int(doc.parameters.get("max_links_per_sentence") or 3)
+        logger = get_event_logger_or_none()
+
+        if logger is not None:
+            await logger.info(
+                "SRL processing started",
+                extra={"text_length": len(text), "max_links_per_sentence": max_links},
+            )
 
         tokens = sorted(
             [fs for fs in doc.fs if fs.begin is not None and fs.end is not None and self._is_type(fs.type, TOKEN_TYPE)],
@@ -149,6 +157,18 @@ class SRLAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         await metrics.count("srl_links", link_counter)
         await metrics.count("srl_annotations", annotations)
         await metrics.timing("srl_processing_ms", elapsed_ms)
+
+        if logger is not None:
+            await logger.info(
+                "SRL processing completed",
+                extra={
+                    "tokens": len(tokens),
+                    "sentences": len(sentences),
+                    "links": link_counter,
+                    "annotations": annotations,
+                    "elapsed_ms": elapsed_ms,
+                },
+            )
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

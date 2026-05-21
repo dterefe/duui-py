@@ -9,6 +9,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
+from duui_py.logging import get_event_logger_or_none
 from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
@@ -88,6 +89,13 @@ class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         started = time()
         text = sofa_text_value(doc.sofa) or ""
         model_label = str(doc.parameters.get("name_model") or "heuristic-essay-scorer")
+        logger = get_event_logger_or_none()
+
+        if logger is not None:
+            await logger.info(
+                "Essay scoring started",
+                extra={"model": model_label, "text_length": len(text)},
+            )
 
         divs = [
             fs
@@ -119,6 +127,12 @@ class EssayScorerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         elapsed_ms = int((time() - started) * 1000)
         await metrics.count("essay_spans_scored", scores, model=model_label)
         await metrics.timing("essay_processing_ms", elapsed_ms)
+
+        if logger is not None:
+            await logger.info(
+                "Essay scoring completed",
+                extra={"scores": scores, "elapsed_ms": elapsed_ms},
+            )
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

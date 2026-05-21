@@ -1,4 +1,4 @@
-# Events, Metrics, and Errors
+# Events, Logging, Metrics, and Errors
 
 When logging is enabled, `create_app` exposes one event endpoint:
 
@@ -19,9 +19,34 @@ event: handshake
 data: {"stream_id":"..."}
 ```
 
+## Logs
+
+Annotators use the normal event logger for human-readable lifecycle and debug messages. It is a no-op when event logging is not configured.
+
+```python
+from duui_py.logging import get_event_logger_or_none
+
+
+async def process(self, doc):
+    logger = get_event_logger_or_none()
+    if logger is not None:
+        await logger.info("GNFinder processing started", extra={"text_length": len(text)})
+
+    ...
+
+    if logger is not None:
+        await logger.info("GNFinder processing completed", extra={"matches": matches})
+```
+
+Example SSE log payload:
+
+```text
+data: {"type":"log","level":"info","message":"GNFinder processing completed",...}
+```
+
 ## Metrics
 
-Annotators use the small `metrics` helper. It is a no-op when event logging is not configured.
+Annotators use the small `metrics` helper for counters, gauges, and timings.
 
 ```python
 from time import time

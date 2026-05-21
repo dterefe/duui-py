@@ -8,6 +8,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
+from duui_py.logging import get_event_logger_or_none
 from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
@@ -92,6 +93,13 @@ class ArgumentAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         selection_types_raw = str(doc.parameters.get("selection_types") or "").strip()
         selection_types = {s.strip() for s in selection_types_raw.split(",") if s.strip()}
         text = sofa_text_value(doc.sofa) or ""
+        logger = get_event_logger_or_none()
+
+        if logger is not None:
+            await logger.info(
+                "Argument processing started",
+                extra={"topic": topic, "text_length": len(text), "selection_types": sorted(selection_types)},
+            )
 
         spans = [
             fs
@@ -131,6 +139,12 @@ class ArgumentAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         await metrics.count("argument_annotations", annotations, topic=topic)
         await metrics.count("argument_feature_structures", feature_structures, topic=topic)
         await metrics.timing("argument_processing_ms", elapsed_ms)
+
+        if logger is not None:
+            await logger.info(
+                "Argument processing completed",
+                extra={"spans": len(spans), "annotations": annotations, "elapsed_ms": elapsed_ms},
+            )
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

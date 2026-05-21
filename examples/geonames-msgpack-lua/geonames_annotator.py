@@ -13,6 +13,7 @@ from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
 from duui_py.errors import bad_gateway, unavailable, unprocessable
+from duui_py.logging import get_event_logger_or_none
 from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
@@ -141,6 +142,7 @@ class GeoNamesAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         mode = str(doc.parameters.get("mode") or "find")
         result_selection = str(doc.parameters.get("result_selection") or "first")
         backend_url = self._backend_url(doc.parameters)
+        logger = get_event_logger_or_none()
         locations = [
             fs
             for fs in doc.fs
@@ -154,6 +156,17 @@ class GeoNamesAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             unprocessable(
                 "GeoNames backend URL is required via parameter 'backend_url' or GEONAMES_FST_URL.",
                 parameter="backend_url",
+            )
+
+        if logger is not None:
+            await logger.info(
+                "GeoNames processing started",
+                extra={
+                    "locations": len(locations),
+                    "mode": mode,
+                    "result_selection": result_selection,
+                    "backend_url": backend_url,
+                },
             )
 
         queries = []
@@ -219,6 +232,12 @@ class GeoNamesAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         await metrics.count("geonames_locations_received", len(locations), mode=mode, result_selection=result_selection)
         await metrics.count("geonames_matches", matches, mode=mode, result_selection=result_selection)
         await metrics.timing("geonames_processing_ms", elapsed_ms)
+
+        if logger is not None:
+            await logger.info(
+                "GeoNames processing completed",
+                extra={"locations": len(locations), "matches": matches, "elapsed_ms": elapsed_ms},
+            )
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

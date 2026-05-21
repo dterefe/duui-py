@@ -286,7 +286,11 @@ class MsgPackLuaCodec(Codec[V1RequestEnvelope, DuuiResult]):
             chunks.append((CHUNK_FEATURE_STRUCTURE, msgpack.packb(result.modification_meta.model_dump(), use_bin_type=True)))
 
         for error in result.errors:
-            chunks.append((CHUNK_ERROR, msgpack.packb({"message": error}, use_bin_type=True)))
+            if isinstance(error, DuuiError):
+                payload = error.model_dump(exclude_none=True)
+            else:
+                payload = {"message": str(error)}
+            chunks.append((CHUNK_ERROR, msgpack.packb(payload, use_bin_type=True)))
 
         return chunks
 
@@ -534,13 +538,13 @@ end
 
 local function write_chunk(output_stream, chunk_type, payload)
     local payload_len = byte_len(payload)
-    output_stream:write(chunk_type)
-    output_stream:write(math.floor(payload_len / 16777216) % 256)
-    output_stream:write(math.floor(payload_len / 65536) % 256)
-    output_stream:write(math.floor(payload_len / 256) % 256)
-    output_stream:write(payload_len % 256)
+    DUUIBytes:write(output_stream, chunk_type)
+    DUUIBytes:write(output_stream, math.floor(payload_len / 16777216) % 256)
+    DUUIBytes:write(output_stream, math.floor(payload_len / 65536) % 256)
+    DUUIBytes:write(output_stream, math.floor(payload_len / 256) % 256)
+    DUUIBytes:write(output_stream, payload_len % 256)
     if payload_len > 0 then
-        output_stream:write(payload)
+        DUUIBytes:write(output_stream, payload)
     end
 end
 

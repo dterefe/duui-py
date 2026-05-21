@@ -11,6 +11,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
+from duui_py.logging import get_event_logger_or_none
 from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
@@ -101,6 +102,13 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         started = time()
         text = sofa_text_value(doc.sofa) or ""
         model_name = str(doc.parameters.get("model_name") or "en_core_web_sm")
+        logger = get_event_logger_or_none()
+
+        if logger is not None:
+            await logger.info(
+                "spaCy processing started",
+                extra={"model": model_name, "text_length": len(text)},
+            )
 
         generated, model_version = self._try_spacy(text, model_name)
         engine = "spacy"
@@ -122,6 +130,12 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         for annotation_type, count in counts.items():
             await metrics.count("spacy_annotations_by_type", count, type=annotation_type)
         await metrics.timing("spacy_processing_ms", elapsed_ms)
+
+        if logger is not None:
+            await logger.info(
+                "spaCy processing completed",
+                extra={"engine": engine, "model": model_name, "annotations": total, "elapsed_ms": elapsed_ms},
+            )
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,

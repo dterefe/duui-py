@@ -2,7 +2,7 @@
 
 The examples are the contract for the currently documented framework surface.
 
-All current Python examples define config in code, use generated `MsgPackLuaCodec`, pass `AsyncChunkedRequestAdapter` to `create_app`, and yield existing UIMA model objects. They do not use custom Lua scripts.
+All current Python examples define config in code, use generated `MsgPackLuaCodec`, pass `AsyncChunkedRequestAdapter` to `create_app`, log normal lifecycle messages, emit metrics, and yield existing UIMA model objects. They do not use custom Lua scripts.
 
 ## GNFinder
 
@@ -16,14 +16,15 @@ Uses:
 
 - plain text input
 - `GNFinderTaxon`
-- `VerifiedTaxon` when `verify=true`
+- `VerifiedTaxon` when `verify=true` and GNFinder returns `verification.bestResult`
 - BIOfid/GNFinder type system XML
+- a real `gnfinder` executable via `GNFINDER_BINARY`, `PATH`, or the `gnfinder_binary` parameter
 
 Example output:
 
 ```text
-org.texttechnologylab.annotation.biofid.gnfinder.VerifiedTaxon [0, 12] "Homo sapiens"
-org.texttechnologylab.annotation.biofid.gnfinder.VerifiedTaxon [17, 29] "Panthera leo"
+org.texttechnologylab.annotation.biofid.gnfinder.Taxon [0, 12] "Homo sapiens"
+org.texttechnologylab.annotation.biofid.gnfinder.Taxon [17, 29] "Panthera leo"
 ```
 
 ## TaxoNERD

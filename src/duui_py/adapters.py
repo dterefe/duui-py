@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 
 from fastapi import HTTPException, Request, Response
-from fastapi.responses import StreamingResponse
 
 from duui_py.annotator import DuuiAnnotator, V1AsyncProcess, V1Payload, V1Process
 from duui_py.codecs.base import Codec
@@ -46,7 +45,7 @@ def _merge_output_item(base: DuuiResult, item: Any) -> DuuiResult:
     if isinstance(item, DuuiResult):
         return _merge_results(base, item)
     if isinstance(item, DuuiError):
-        base.errors.append(item.message)
+        base.errors.append(item)
     elif isinstance(item, SoFaBase):
         base.sofa = item
     elif isinstance(item, Annotation):
@@ -244,7 +243,7 @@ async def _process_v1_or_simple(
     try:
         result = await returned
     except Exception as exc:  # noqa: BLE001
-        return DuuiResult(errors=[(await _exception_to_error_item(exc, operation="process")).message])
+        return DuuiResult(errors=[await _exception_to_error_item(exc, operation="process")])
     if isinstance(result, DuuiResult):
         _validate_output_mime(cfg, result)
         return result
@@ -341,9 +340,7 @@ class SynchronousRequestAdapter(RequestAdapter[RequestT, ResponseT]):
 
 
 def _supports_async_chunks(codec: object) -> bool:
-    return callable(getattr(codec, "decode_request_stream", None)) and callable(
-        getattr(codec, "encode_response_stream", None)
-    )
+    return callable(getattr(codec, "decode_request_stream", None)) and callable(getattr(codec, "encode_response", None))
 
 
 class AsyncChunkedRequestAdapter(RequestAdapter[V1RequestEnvelope, Any]):
@@ -385,23 +382,18 @@ class AsyncChunkedRequestAdapter(RequestAdapter[V1RequestEnvelope, Any]):
             detail = f"request decode failed: {exc}" if errors.include_validation_details else "request decode failed"
             raise HTTPException(status_code=400 if errors.fail_on_codec_error else 422, detail=detail) from exc
 
-        async def response_stream() -> AsyncIterator[bytes]:
-            total = 0
-            try:
-                async for part in cast(Any, codec).encode_response_stream(
-                    _iter_v1_or_simple(cast(DuuiAnnotator[Any, Any], annotator), cfg, doc)
-                ):
-                    total += len(part)
-                    if limits.response_max_bytes is not None and total > limits.response_max_bytes:
-                        raise HTTPException(status_code=500, detail="response payload too large")
-                    yield part
-            except HTTPException:
-                raise
-            except Exception as exc:  # noqa: BLE001
-                detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
-                raise HTTPException(status_code=500 if errors.fail_on_codec_error else 422, detail=detail) from exc
+        result = await _process_v1_or_simple(cast(DuuiAnnotator[Any, Any], annotator), cfg, doc)
 
-        return StreamingResponse(response_stream(), media_type=codec.response_media_type)
+        try:
+            response_body = codec.encode_response(cast(Any, result))
+        except Exception as exc:  # noqa: BLE001
+            detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
+            raise HTTPException(status_code=500 if errors.fail_on_codec_error else 422, detail=detail) from exc
+
+        if limits.response_max_bytes is not None and len(response_body) > limits.response_max_bytes:
+            raise HTTPException(status_code=500, detail="response payload too large")
+
+        return Response(content=response_body, media_type=codec.response_media_type)
 
 
 def default_request_adapter(codec: Codec[Any, Any]) -> RequestAdapter[Any, Any]:

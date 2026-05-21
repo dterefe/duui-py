@@ -12,6 +12,7 @@ from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
 from duui_py.errors import unavailable, unprocessable
+from duui_py.logging import get_event_logger_or_none
 from duui_py.metrics import metrics
 from duui_py.models import (
     AnnotatorConfig,
@@ -87,14 +88,26 @@ class WhisperAnnotator(DuuiAnnotator[object, object], V1AsyncProcess[V1Payload])
         model_name = str(parameters.get("model_name") or "base")
         use_dummy = str(parameters.get("use_dummy") or "").lower() in {"1", "true", "yes", "on"}
         audio_bytes = bytes(sofa.bytes)
+        logger = get_event_logger_or_none()
 
         if not audio_bytes:
             unprocessable("No audio payload found in Sofa bytes.", model=model_name)
+
+        if logger is not None:
+            await logger.info(
+                "Whisper processing started",
+                extra={"model": model_name, "bytes": len(audio_bytes), "use_dummy": use_dummy},
+            )
 
         if use_dummy:
             elapsed_ms = int((time() - started) * 1000)
             await metrics.count("whisper_audio_tokens", 1, mode="dummy", model=model_name)
             await metrics.timing("whisper_processing_ms", elapsed_ms, mode="dummy")
+            if logger is not None:
+                await logger.info(
+                    "Whisper processing completed",
+                    extra={"mode": "dummy", "tokens": 1, "elapsed_ms": elapsed_ms},
+                )
             yield AudioToken(begin=0, end=0, timeStart=0.0, timeEnd=0.0, value=f"dummy-bytes-{len(audio_bytes)}")
             yield AnnotatorMetaData(
                     name=self.config.descriptor.name,
@@ -140,6 +153,12 @@ class WhisperAnnotator(DuuiAnnotator[object, object], V1AsyncProcess[V1Payload])
         elapsed_ms = int((time() - started) * 1000)
         await metrics.count("whisper_audio_tokens", token_count, mode="whisper", model=model_name)
         await metrics.timing("whisper_processing_ms", elapsed_ms, mode="whisper")
+
+        if logger is not None:
+            await logger.info(
+                "Whisper processing completed",
+                extra={"mode": "whisper", "tokens": token_count, "elapsed_ms": elapsed_ms},
+            )
 
         yield AnnotatorMetaData(
                 name=self.config.descriptor.name,
