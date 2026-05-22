@@ -35,15 +35,16 @@ from duui_py.models.uima_typesystem.texttechnologylab.annotation.biofid.gnfinder
     VerifiedTaxon,
 )
 
-DEFAULT_GNFINDER_BINARY = "/home/stud_homes/s0424382/projects/ttlab/duui/TTLab-UIMA/GNFinder/gnfinder"
+DEFAULT_GNFINDER_BINARY = "gnfinder"
 
 
 def _resolve_binary(parameter_value: object | None = None) -> str | None:
     candidates = [
         str(parameter_value) if parameter_value else None,
         os.getenv("GNFINDER_BINARY"),
-        DEFAULT_GNFINDER_BINARY,
         shutil.which("gnfinder"),
+        DEFAULT_GNFINDER_BINARY,
+        "/home/stud_homes/s0424382/projects/ttlab/duui/TTLab-UIMA/GNFinder/gnfinder",
     ]
     for candidate in candidates:
         if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):

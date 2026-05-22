@@ -1,6 +1,12 @@
+FROM golang:1.23 AS gnfinder-builder
+
+RUN go install github.com/gnames/gnfinder@latest
+
 FROM python:3.11-slim
 
 WORKDIR /app
+
+COPY --from=gnfinder-builder /go/bin/gnfinder /usr/local/bin/gnfinder
 
 COPY . /app
 

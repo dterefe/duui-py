@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spacy-legacy-lua"
+version = "0.1.4"
+description = "Legacy TTLab spaCy custom-Lua service migrated to duui-py"
+requires-python = ">=3.10"
+dependencies = [
+  "duui-py",
+  "uvicorn[standard]>=0.27.0",
+  "spacy[transformers]>=3.7.0,<4.0.0",
+]
+
+[tool.setuptools]
+py-modules = ["spacy_legacy_annotator"]

@@ -325,7 +325,12 @@ class SynchronousRequestAdapter(RequestAdapter[RequestT, ResponseT]):
         if isinstance(doc, V1RequestEnvelope):
             result = cast(ResponseT, await _process_v1_or_simple(cast(DuuiAnnotator[Any, Any], annotator), cfg, doc))
         else:
-            result = await annotator.process(doc)
+            try:
+                result = await annotator.process(doc)
+            except Exception as exc:  # noqa: BLE001
+                error = exc if isinstance(exc, DuuiHttpError) else wrap_exception(exc)
+                await log_duui_error(error, operation="process")
+                raise HTTPException(status_code=error.status_code, detail=error.to_duui_error().model_dump()) from exc
 
         try:
             response_body = codec.encode_response(result)
