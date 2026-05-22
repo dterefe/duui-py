@@ -65,10 +65,29 @@ class LoggingSettings(BaseModel):
     stream_timeout_minutes: int = Field(default=5, ge=1, le=60)
     max_queue_size: int = Field(default=1000, ge=10, le=10000)
     metrics_collection_interval_seconds: int = Field(default=5, ge=1, le=300)
-    include_system_metrics: bool = True
-    include_process_metrics: bool = True
-    include_disk_metrics: bool = True
-    include_network_metrics: bool = True
+    include_system_metrics: bool = False
+    include_process_metrics: bool = False
+    include_disk_metrics: bool = False
+    include_network_metrics: bool = False
+    max_resource_sample_interval_ms: int = Field(default=60000, ge=100, le=60000)
+    default_telemetry_scopes: list[str] = Field(default_factory=lambda: ["global", "component", "replica"])
+    supported_telemetry_scopes: list[str] = Field(
+        default_factory=lambda: [
+            "global",
+            "machine",
+            "orchestrator",
+            "pipeline_run",
+            "component",
+            "replica",
+            "component_replica",
+            "orchestrator_component",
+            "request",
+            "artifact",
+        ]
+    )
+    default_histogram_buckets_ms: list[float] = Field(
+        default_factory=lambda: [1, 2, 5, 10, 25, 50, 75, 100, 150, 250, 500, 750, 1000, 1500, 2500, 5000, 10000]
+    )
 
 
 class FrameworkSettings(BaseModel):

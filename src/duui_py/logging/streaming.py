@@ -8,6 +8,12 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from duui_py.logging.core import AnyEvent
+from duui_py.telemetry import (
+    DEFAULT_SCOPES,
+    SUPPORTED_SCOPES,
+    TELEMETRY_PROTOCOL_VERSION,
+    host_resource_attributes,
+)
 
 
 class StreamRegistrationRequest(BaseModel):
@@ -16,8 +22,10 @@ class StreamRegistrationRequest(BaseModel):
     annotator_id: str | None = None
     replica_id: str | None = None
     application_id: str | None = None
-    artifact_id: str | None = None
-    request_id: str | None = None
+    orchestrator_id: str | None = None
+    machine_id: str | None = None
+    component_id: str | None = None
+    pipeline_run_id: str | None = None
     ttl_minutes: int = Field(default=5, ge=1, le=60)
 
 
@@ -67,7 +75,17 @@ class StreamConnection:
                 return
 
     async def events(self) -> AsyncIterator[bytes]:
-        yield f"event: handshake\ndata: {{\"stream_id\":\"{self.stream_id}\"}}\n\n".encode("utf-8")
+        handshake = {
+            "stream_id": self.stream_id,
+            "identifiers": self.identifiers,
+            "resource": host_resource_attributes(),
+            "supported_scopes": sorted(SUPPORTED_SCOPES),
+            "default_scopes": list(DEFAULT_SCOPES),
+            "telemetry_protocol_version": TELEMETRY_PROTOCOL_VERSION,
+        }
+        import json
+
+        yield f"event: handshake\ndata: {json.dumps(handshake, separators=(',', ':'))}\n\n".encode("utf-8")
         while self._active:
             if datetime.now(timezone.utc) > self.expires_at:
                 break
@@ -75,13 +93,13 @@ class StreamConnection:
                 event = await asyncio.wait_for(self._queue.get(), timeout=30)
             except asyncio.TimeoutError:
                 self.last_activity = datetime.now(timezone.utc)
-                yield b":keepalive\n\n"
+                yield b"event: keepalive\ndata: {}\n\n"
                 continue
 
             if event is None:
                 break
             self.last_activity = datetime.now(timezone.utc)
-            yield f"data: {event.model_dump_json()}\n\n".encode("utf-8")
+            yield f"event: {event.type.value}\ndata: {event.model_dump_json()}\n\n".encode("utf-8")
             self._queue.task_done()
 
     def close(self) -> None:

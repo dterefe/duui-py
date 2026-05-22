@@ -2,15 +2,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-import time
+import urllib.request
 from collections.abc import AsyncIterator
 from contextvars import ContextVar
-from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, TYPE_CHECKING, Union
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from duui_py.telemetry import host_resource_attributes, now_unix_nano
 
 if TYPE_CHECKING:
     from duui_py.models.config import AnnotatorDescriptor
@@ -24,6 +25,8 @@ class EventType(str, Enum):
     LOG = "log"
     METRIC = "metric"
     ERROR = "error"
+    SPAN = "span"
+    SUMMARY = "summary"
 
 
 class LogLevel(str, Enum):
@@ -35,46 +38,60 @@ class LogLevel(str, Enum):
 
 
 class Event(BaseModel):
-    """Base event model for all logging events."""
+    """OpenTelemetry-compatible base event envelope."""
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     type: EventType
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    time_unix_nano: int = Field(default_factory=now_unix_nano)
+    observed_time_unix_nano: int = Field(default_factory=now_unix_nano)
     event_id: str = Field(default_factory=lambda: str(uuid4()))
-    context: Dict[str, str] = Field(default_factory=dict)
-    annotator_config: Optional[Dict[str, str]] = None
+    resource: Dict[str, str] = Field(default_factory=host_resource_attributes)
+    scope: Dict[str, str] = Field(default_factory=dict)
+    attributes: Dict[str, Any] = Field(default_factory=dict)
+    trace_id: Optional[str] = None
+    span_id: Optional[str] = None
 
 
 class LogEvent(Event):
-    """Event for standard log messages."""
+    """OpenTelemetry-compatible log record."""
     type: EventType = EventType.LOG
-    level: LogLevel
-    message: str
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    severity_text: str
+    severity_number: int
+    body: str
 
 
 class MetricEvent(Event):
-    """Event for resource metrics."""
+    """OpenTelemetry-compatible metric record."""
     type: EventType = EventType.METRIC
-    category: str  # e.g., "cpu", "memory", "disk", "network"
-    name: str      # e.g., "cpu_percent", "memory_rss_bytes"
-    value: float
-    unit: str      # e.g., "percent", "bytes", "bytes_per_second"
-    interval_ms: int = 0  # Time span over which metric was measured
-    tags: Dict[str, str] = Field(default_factory=dict)
+    name: str
+    unit: str
+    metric_type: str = "gauge"
+    data_points: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class ErrorEvent(Event):
-    """Event for structured error reporting."""
+    """Structured error record encoded as an OpenTelemetry ERROR log."""
     type: EventType = EventType.ERROR
-    error_type: str
-    message: str
-    stack_trace: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    severity_text: str = "ERROR"
+    severity_number: int = 17
+    body: str
+
+
+class SpanEvent(Event):
+    type: EventType = EventType.SPAN
+    name: str
+    start_time_unix_nano: int
+    end_time_unix_nano: int
+    status_code: int = 200
+
+
+class SummaryEvent(Event):
+    type: EventType = EventType.SUMMARY
+    name: str
 
 
 # Type alias for any event
-AnyEvent = Union[LogEvent, MetricEvent, ErrorEvent]
+AnyEvent = Union[LogEvent, MetricEvent, ErrorEvent, SpanEvent, SummaryEvent]
 
 
 class EventSink:
@@ -105,7 +122,31 @@ class ConsoleSink(EventSink):
     
     async def send(self, event: AnyEvent) -> None:
         """Print event to console."""
-        print(f"[{event.timestamp.isoformat()}] {event.type.value}: {event.model_dump_json()}")
+        print(f"{event.type.value}: {event.model_dump_json()}")
+
+
+class OTLPSink(EventSink):
+    """Dependency-free OTLP/HTTP JSON sink for DUUI telemetry events."""
+
+    def __init__(self, endpoint: str, headers: Optional[Dict[str, str]] = None, timeout_seconds: float = 2.0):
+        self.endpoint = endpoint
+        self.headers = headers or {}
+        self.timeout_seconds = timeout_seconds
+
+    async def send(self, event: AnyEvent) -> None:
+        payload = event.model_dump_json().encode("utf-8")
+
+        def post() -> None:
+            request = urllib.request.Request(
+                self.endpoint,
+                data=payload,
+                headers={"Content-Type": "application/json", **self.headers},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                response.read()
+
+        await asyncio.to_thread(post)
 
 
 class EventLogger:
@@ -190,16 +231,7 @@ class EventLogger:
         event_context = get_event_context()
         if event_context:
             context.update(event_context.context)
-            if event_context.request_id:
-                context["request_id"] = event_context.request_id
-            if event_context.artifact_id:
-                context["artifact_id"] = event_context.artifact_id
-            if event_context.annotator_id:
-                context["annotator_id"] = event_context.annotator_id
-            if event_context.replica_id:
-                context["replica_id"] = event_context.replica_id
-            if event_context.application_id:
-                context["application_id"] = event_context.application_id
+            context.update(event_context.otel_attributes())
         
         return context
     
@@ -212,6 +244,20 @@ class EventLogger:
             "name": self.annotator_descriptor.name,
             "version": self.annotator_descriptor.version,
         }
+
+    def _trace_context(self) -> tuple[str | None, str | None]:
+        from duui_py.logging.context import get_event_context
+
+        context = get_event_context()
+        if context is None:
+            return None, None
+        return context.trace_id, context.span_id
+
+    def _scope(self) -> dict[str, str]:
+        return {"name": "duui-py", "version": "0.1.0"}
+
+    async def emit(self, event: AnyEvent) -> None:
+        await self._enqueue_event(event)
     
     async def log(
         self,
@@ -220,12 +266,15 @@ class EventLogger:
         extra: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log a message with the specified level."""
+        trace_id, span_id = self._trace_context()
         event = LogEvent(
-            level=level,
-            message=message,
-            extra=extra or {},
-            context=self._build_event_context(),
-            annotator_config=self._build_annotator_config(),
+            severity_text=level.value,
+            severity_number=_severity_number(level),
+            body=message,
+            attributes={**self._build_event_context(), **(extra or {})},
+            scope=self._scope(),
+            trace_id=trace_id,
+            span_id=span_id,
         )
         await self._enqueue_event(event)
     
@@ -259,15 +308,52 @@ class EventLogger:
         tags: Optional[Dict[str, str]] = None,
     ) -> None:
         """Log a metric."""
+        trace_id, span_id = self._trace_context()
+        attributes = {**self._build_event_context(), **(tags or {}), "duui.metric.category": category}
         event = MetricEvent(
-            category=category,
             name=name,
-            value=value,
             unit=unit,
-            interval_ms=interval_ms,
-            tags=tags or {},
-            context=self._build_event_context(),
-            annotator_config=self._build_annotator_config(),
+            metric_type="sum" if unit == "count" else "gauge",
+            data_points=[
+                {
+                    "time_unix_nano": now_unix_nano(),
+                    "as_double": float(value),
+                    "attributes": attributes,
+                    "interval_ms": interval_ms,
+                }
+            ],
+            attributes=attributes,
+            scope=self._scope(),
+            trace_id=trace_id,
+            span_id=span_id,
+        )
+        await self._enqueue_event(event)
+
+    async def histogram(
+        self,
+        category: str,
+        name: str,
+        histogram: Dict[str, Any],
+        unit: str,
+        tags: Optional[Dict[str, str]] = None,
+    ) -> None:
+        trace_id, span_id = self._trace_context()
+        attributes = {**self._build_event_context(), **(tags or {}), "duui.metric.category": category}
+        event = MetricEvent(
+            name=name,
+            unit=unit,
+            metric_type="histogram",
+            data_points=[
+                {
+                    "time_unix_nano": now_unix_nano(),
+                    "attributes": attributes,
+                    **histogram,
+                }
+            ],
+            attributes=attributes,
+            scope=self._scope(),
+            trace_id=trace_id,
+            span_id=span_id,
         )
         await self._enqueue_event(event)
     
@@ -279,15 +365,67 @@ class EventLogger:
         extra: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Log a structured error event."""
+        trace_id, span_id = self._trace_context()
+        attributes = {
+            **self._build_event_context(),
+            **(extra or {}),
+            "exception.type": error_type,
+        }
+        if stack_trace is not None:
+            attributes["exception.stacktrace"] = stack_trace
         event = ErrorEvent(
-            error_type=error_type,
-            message=message,
-            stack_trace=stack_trace,
-            extra=extra or {},
-            context=self._build_event_context(),
-            annotator_config=self._build_annotator_config(),
+            body=message,
+            attributes=attributes,
+            scope=self._scope(),
+            trace_id=trace_id,
+            span_id=span_id,
         )
         await self._enqueue_event(event)
+
+    async def span(
+        self,
+        *,
+        name: str,
+        start_time_unix_nano: int,
+        end_time_unix_nano: int,
+        status_code: int,
+        attributes: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        trace_id, span_id = self._trace_context()
+        await self._enqueue_event(
+            SpanEvent(
+                name=name,
+                start_time_unix_nano=start_time_unix_nano,
+                end_time_unix_nano=end_time_unix_nano,
+                status_code=status_code,
+                attributes={**self._build_event_context(), **(attributes or {})},
+                scope=self._scope(),
+                trace_id=trace_id,
+                span_id=span_id,
+            )
+        )
+
+    async def summary(self, *, name: str, attributes: Optional[Dict[str, Any]] = None) -> None:
+        trace_id, span_id = self._trace_context()
+        await self._enqueue_event(
+            SummaryEvent(
+                name=name,
+                attributes={**self._build_event_context(), **(attributes or {})},
+                scope=self._scope(),
+                trace_id=trace_id,
+                span_id=span_id,
+            )
+        )
+
+
+def _severity_number(level: LogLevel) -> int:
+    return {
+        LogLevel.DEBUG: 5,
+        LogLevel.INFO: 9,
+        LogLevel.WARNING: 13,
+        LogLevel.ERROR: 17,
+        LogLevel.CRITICAL: 21,
+    }[level]
 
 
 # Global logger instance

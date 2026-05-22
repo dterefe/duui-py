@@ -9,7 +9,7 @@ The supported example path is deliberately small:
 - use generated `MsgPackLuaCodec` communication Lua
 - use `AsyncChunkedRequestAdapter` for example annotators
 - yield existing UIMA model objects from `duui_py.models.uima_typesystem`
-- stream logs, metrics, and errors through `GET /v2/events`
+- stream OpenTelemetry-compatible logs, metrics, spans, summaries, and errors through `GET /v2/events`
 
 ## Install
 
@@ -33,6 +33,10 @@ GET  /v1/communication_layer
 POST /v1/process
 GET  /v2/events
 ```
+
+Per-request telemetry is controlled with `X-DUUI-Telemetry`; see
+[`docs/events.md`](docs/events.md) for scoped histograms, resource gauges, and
+trace context headers.
 
 ## Documentation
 

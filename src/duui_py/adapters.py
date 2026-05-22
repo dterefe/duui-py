@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import time
 from collections.abc import AsyncIterable, AsyncIterator
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
@@ -13,6 +14,7 @@ from duui_py.errors import DuuiHttpError, log_duui_error, wrap_exception
 from duui_py.models import AnnotatorConfig, DuuiError, DuuiResult, V1RequestEnvelope
 from duui_py.models.uima import Annotation, FeatureStructure, SoFa, SoFaAnnotationSpans, SoFaBase, sofa_kind
 from duui_py.models.uima_typesystem.texttechnologylab.annotation.types import AnnotatorMetaData, DocumentModification
+from duui_py.telemetry import TelemetryRecorder
 from duui_py.utils.mime import matches_mime_type
 
 RequestT = TypeVar("RequestT")
@@ -309,39 +311,67 @@ class SynchronousRequestAdapter(RequestAdapter[RequestT, ResponseT]):
         codec: Codec[RequestT, ResponseT],
         cfg: AnnotatorConfig,
     ) -> Response:
+        recorder = TelemetryRecorder()
+        await recorder.start()
+        status_code = 200
+        failure: BaseException | None = None
         limits = cfg.meta.settings.limits
         errors = cfg.meta.settings.errors
 
-        body = await request.body()
-        if limits.request_max_bytes is not None and len(body) > limits.request_max_bytes:
-            raise HTTPException(status_code=413, detail="request payload too large")
-
         try:
-            doc = codec.decode_request(body)
-        except Exception as exc:  # noqa: BLE001
-            detail = f"request decode failed: {exc}" if errors.include_validation_details else "request decode failed"
-            raise HTTPException(status_code=400 if errors.fail_on_codec_error else 422, detail=detail) from exc
+            read_started = time.perf_counter()
+            body = await request.body()
+            recorder.mark("read", (time.perf_counter() - read_started) * 1000.0)
+            if limits.request_max_bytes is not None and len(body) > limits.request_max_bytes:
+                status_code = 413
+                raise HTTPException(status_code=413, detail="request payload too large")
 
-        if isinstance(doc, V1RequestEnvelope):
-            result = cast(ResponseT, await _process_v1_or_simple(cast(DuuiAnnotator[Any, Any], annotator), cfg, doc))
-        else:
+            decode_started = time.perf_counter()
             try:
-                result = await annotator.process(doc)
+                doc = codec.decode_request(body)
             except Exception as exc:  # noqa: BLE001
-                error = exc if isinstance(exc, DuuiHttpError) else wrap_exception(exc)
-                await log_duui_error(error, operation="process")
-                raise HTTPException(status_code=error.status_code, detail=error.to_duui_error().model_dump()) from exc
+                detail = f"request decode failed: {exc}" if errors.include_validation_details else "request decode failed"
+                status_code = 400 if errors.fail_on_codec_error else 422
+                raise HTTPException(status_code=status_code, detail=detail) from exc
+            recorder.mark("decode", (time.perf_counter() - decode_started) * 1000.0)
 
-        try:
-            response_body = codec.encode_response(result)
-        except Exception as exc:  # noqa: BLE001
-            detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
-            raise HTTPException(status_code=500 if errors.fail_on_codec_error else 422, detail=detail) from exc
+            process_started = time.perf_counter()
+            if isinstance(doc, V1RequestEnvelope):
+                result = cast(ResponseT, await _process_v1_or_simple(cast(DuuiAnnotator[Any, Any], annotator), cfg, doc))
+            else:
+                try:
+                    result = await annotator.process(doc)
+                except Exception as exc:  # noqa: BLE001
+                    error = exc if isinstance(exc, DuuiHttpError) else wrap_exception(exc)
+                    await log_duui_error(error, operation="process")
+                    status_code = error.status_code
+                    raise HTTPException(status_code=error.status_code, detail=error.to_duui_error().model_dump()) from exc
+            recorder.mark("process", (time.perf_counter() - process_started) * 1000.0)
 
-        if limits.response_max_bytes is not None and len(response_body) > limits.response_max_bytes:
-            raise HTTPException(status_code=500, detail="response payload too large")
+            encode_started = time.perf_counter()
+            try:
+                response_body = codec.encode_response(result)
+            except Exception as exc:  # noqa: BLE001
+                detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
+                status_code = 500 if errors.fail_on_codec_error else 422
+                raise HTTPException(status_code=status_code, detail=detail) from exc
+            recorder.mark("encode", (time.perf_counter() - encode_started) * 1000.0)
 
-        return Response(content=response_body, media_type=codec.response_media_type)
+            if limits.response_max_bytes is not None and len(response_body) > limits.response_max_bytes:
+                status_code = 500
+                raise HTTPException(status_code=500, detail="response payload too large")
+
+            return Response(content=response_body, media_type=codec.response_media_type)
+        except HTTPException as exc:
+            failure = exc
+            status_code = exc.status_code
+            raise
+        except Exception as exc:
+            failure = exc
+            status_code = 500
+            raise
+        finally:
+            await recorder.finish(status_code=status_code, error=failure)
 
 
 def _supports_async_chunks(codec: object) -> bool:
@@ -359,6 +389,10 @@ class AsyncChunkedRequestAdapter(RequestAdapter[V1RequestEnvelope, Any]):
         codec: Codec[V1RequestEnvelope, Any],
         cfg: AnnotatorConfig,
     ) -> Response:
+        recorder = TelemetryRecorder()
+        await recorder.start()
+        status_code = 200
+        failure: BaseException | None = None
         if not _supports_async_chunks(codec):
             raise HTTPException(status_code=500, detail="codec does not support async chunked request handling")
 
@@ -376,29 +410,50 @@ class AsyncChunkedRequestAdapter(RequestAdapter[V1RequestEnvelope, Any]):
                 yield part
 
         try:
-            doc = await cast(Any, codec).decode_request_stream(
-                limited_stream(),
-                max_partial_buffer_bytes=self.config.max_partial_buffer_bytes,
-                max_chunk_payload_bytes=self.config.max_chunk_payload_bytes,
-            )
-        except HTTPException:
+            decode_started = time.perf_counter()
+            try:
+                doc = await cast(Any, codec).decode_request_stream(
+                    limited_stream(),
+                    max_partial_buffer_bytes=self.config.max_partial_buffer_bytes,
+                    max_chunk_payload_bytes=self.config.max_chunk_payload_bytes,
+                )
+            except HTTPException as exc:
+                status_code = exc.status_code
+                raise
+            except Exception as exc:  # noqa: BLE001
+                detail = f"request decode failed: {exc}" if errors.include_validation_details else "request decode failed"
+                status_code = 400 if errors.fail_on_codec_error else 422
+                raise HTTPException(status_code=status_code, detail=detail) from exc
+            recorder.mark("decode", (time.perf_counter() - decode_started) * 1000.0)
+
+            process_started = time.perf_counter()
+            result = await _process_v1_or_simple(cast(DuuiAnnotator[Any, Any], annotator), cfg, doc)
+            recorder.mark("process", (time.perf_counter() - process_started) * 1000.0)
+
+            encode_started = time.perf_counter()
+            try:
+                response_body = codec.encode_response(cast(Any, result))
+            except Exception as exc:  # noqa: BLE001
+                detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
+                status_code = 500 if errors.fail_on_codec_error else 422
+                raise HTTPException(status_code=status_code, detail=detail) from exc
+            recorder.mark("encode", (time.perf_counter() - encode_started) * 1000.0)
+
+            if limits.response_max_bytes is not None and len(response_body) > limits.response_max_bytes:
+                status_code = 500
+                raise HTTPException(status_code=500, detail="response payload too large")
+
+            return Response(content=response_body, media_type=codec.response_media_type)
+        except HTTPException as exc:
+            failure = exc
+            status_code = exc.status_code
             raise
-        except Exception as exc:  # noqa: BLE001
-            detail = f"request decode failed: {exc}" if errors.include_validation_details else "request decode failed"
-            raise HTTPException(status_code=400 if errors.fail_on_codec_error else 422, detail=detail) from exc
-
-        result = await _process_v1_or_simple(cast(DuuiAnnotator[Any, Any], annotator), cfg, doc)
-
-        try:
-            response_body = codec.encode_response(cast(Any, result))
-        except Exception as exc:  # noqa: BLE001
-            detail = f"response encode failed: {exc}" if errors.include_validation_details else "response encode failed"
-            raise HTTPException(status_code=500 if errors.fail_on_codec_error else 422, detail=detail) from exc
-
-        if limits.response_max_bytes is not None and len(response_body) > limits.response_max_bytes:
-            raise HTTPException(status_code=500, detail="response payload too large")
-
-        return Response(content=response_body, media_type=codec.response_media_type)
+        except Exception as exc:
+            failure = exc
+            status_code = 500
+            raise
+        finally:
+            await recorder.finish(status_code=status_code, error=failure)
 
 
 def default_request_adapter(codec: Codec[Any, Any]) -> RequestAdapter[Any, Any]:

@@ -21,10 +21,12 @@ from duui_py.logging import (
     set_event_context,
     ConsoleSink,
     EventSink,
+    OTLPSink,
     StreamSink,
 )
 from duui_py.models import AnnotatorConfig
 from duui_py.settings import set_settings_once
+from duui_py.telemetry import create_stream_identifiers_from_request
 
 RequestT = TypeVar("RequestT")
 ResponseT = TypeVar("ResponseT")
@@ -121,6 +123,9 @@ def create_app(
         sinks: list[EventSink] = [cast(EventSink, StreamSink(stream_manager))]
         if os.environ.get("DUUI_DEBUG_LOGGING"):
             sinks.append(cast(EventSink, ConsoleSink()))
+        otlp_endpoint = os.environ.get("DUUI_OTLP_ENDPOINT")
+        if otlp_endpoint:
+            sinks.append(cast(EventSink, OTLPSink(otlp_endpoint)))
 
         logger = configure_logger(
             sinks=sinks,
@@ -151,13 +156,7 @@ def create_app(
 
         @app.get("/v2/events")
         async def stream_events(request: Request) -> StreamingResponse:
-            identifiers = {
-                "annotator_id": request.query_params.get("annotator_id"),
-                "replica_id": request.query_params.get("replica_id"),
-                "application_id": request.query_params.get("application_id"),
-                "artifact_id": request.query_params.get("artifact_id"),
-                "request_id": request.query_params.get("request_id"),
-            }
+            identifiers = create_stream_identifiers_from_request(request)
             ttl_param = request.query_params.get("ttl_minutes")
             ttl_minutes = int(ttl_param) if ttl_param else logging_settings.stream_timeout_minutes
             stream = await stream_manager.open_stream(identifiers=identifiers, ttl_minutes=ttl_minutes)
@@ -183,6 +182,7 @@ def create_app(
         async def event_context_middleware(request: Request, call_next):
             event_context_param = request.query_params.get("event-context")
             event_context = create_event_context_from_request(
+                request,
                 event_context_param=event_context_param,
                 request_id=request.headers.get("x-request-id"),
             )

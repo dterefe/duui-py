@@ -16,8 +16,13 @@ Initial output:
 
 ```text
 event: handshake
-data: {"stream_id":"..."}
+data: {"stream_id":"...","telemetry_protocol_version":"duui-otel-0.1",...}
 ```
+
+The stream handshake is instance/session scoped. Use stream identifiers such as
+`orchestrator_id`, `machine_id`, `component_id`, `replica_id`, and
+`pipeline_run_id`. Task identifiers such as `artifact_id` and `request_id` are
+attached to `/v1/process` events, not required for opening the stream.
 
 ## Logs
 
@@ -41,7 +46,8 @@ async def process(self, doc):
 Example SSE log payload:
 
 ```text
-data: {"type":"log","level":"info","message":"GNFinder processing completed",...}
+event: log
+data: {"type":"log","severity_text":"INFO","severity_number":9,"body":"GNFinder processing completed",...}
 ```
 
 ## Metrics
@@ -77,8 +83,31 @@ async with metrics.timer("geonames_backend_lookup_ms"):
 Example SSE metric payload:
 
 ```text
-data: {"type":"metric","category":"processing","name":"gnfinder_taxon_matches","value":2.0,"unit":"count",...}
+event: metric
+data: {"type":"metric","metric_type":"gauge","name":"gnfinder_taxon_matches","unit":"count","data_points":[...],...}
 ```
+
+## Request Telemetry
+
+Per-task telemetry is controlled through HTTP headers, not Lua parameters.
+
+```http
+X-DUUI-Telemetry: {"resource":["cpu","memory"],"stats":["duration","throughput","histogram"],"scopes":["global","orchestrator","component_replica"],"sample_interval_ms":500}
+traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01
+X-DUUI-Orchestrator-Id: orch-1
+X-DUUI-Component-Id: taxonerd
+X-DUUI-Replica-Id: replica-0
+X-DUUI-Artifact-Id: doc-42
+```
+
+Default request telemetry records duration, throughput, error count, and latency
+histograms for global/component/replica scopes. Resource polling is disabled
+unless a request explicitly enables one or more of `cpu`, `memory`, `disk`, and
+`network`.
+
+The same observation can update multiple scoped histograms. This lets one shared
+remote annotator report global latency and throughput while also reporting
+per-orchestrator, per-pipeline-run, or per-component-replica statistics.
 
 ## Errors
 

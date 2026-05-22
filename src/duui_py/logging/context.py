@@ -1,20 +1,18 @@
 from __future__ import annotations
 
 import contextvars
-from typing import Dict, Optional
-from pydantic import BaseModel, ConfigDict
+from typing import Optional
+
+from fastapi import Request
+
+from duui_py.telemetry import (
+    TelemetryContext,
+    create_telemetry_context_from_request,
+    parse_event_context_param,
+)
 
 
-class EventContext(BaseModel):
-    """Context for request-scoped event logging."""
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    
-    context: Dict[str, str] = {}
-    request_id: Optional[str] = None
-    artifact_id: Optional[str] = None
-    annotator_id: Optional[str] = None
-    replica_id: Optional[str] = None
-    application_id: Optional[str] = None
+EventContext = TelemetryContext
 
 
 # Context variable for storing current event context
@@ -54,78 +52,38 @@ def update_event_context(**kwargs: str) -> None:
             annotator_id=current.annotator_id,
             replica_id=current.replica_id,
             application_id=current.application_id,
+            orchestrator_id=current.orchestrator_id,
+            machine_id=current.machine_id,
+            component_id=current.component_id,
+            pipeline_run_id=current.pipeline_run_id,
+            trace_id=current.trace_id,
+            parent_span_id=current.parent_span_id,
+            span_id=current.span_id,
+            tracestate=current.tracestate,
+            telemetry=current.telemetry,
         )
         set_event_context(new_context)
 
 
-def parse_event_context_param(event_context_param: str) -> Dict[str, str]:
-    """
-    Parse the event-context query parameter into a dictionary.
-    
-    Expected format: "key1=value1,key2=value2,key3=value3"
-    """
-    if not event_context_param:
-        return {}
-    
-    result = {}
-    pairs = event_context_param.split(",")
-    for pair in pairs:
-        if "=" in pair:
-            key, value = pair.split("=", 1)
-            result[key.strip()] = value.strip()
-        else:
-            # Treat as key with empty value
-            result[pair.strip()] = ""
-    
-    return result
-
-
 def create_event_context_from_request(
+    request: Request | None = None,
     event_context_param: Optional[str] = None,
     request_id: Optional[str] = None,
     **extra_context: str,
 ) -> EventContext:
-    """
-    Create an EventContext from request parameters.
-    
-    Args:
-        event_context_param: The raw event-context query parameter value
-        request_id: Optional request ID (could be from headers)
-        **extra_context: Additional context key-value pairs
-    
-    Returns:
-        EventContext instance
-    """
-    context_dict = {}
-    
-    # Parse event-context query parameter
-    if event_context_param:
-        context_dict.update(parse_event_context_param(event_context_param))
-    
-    # Add extra context
+    if request is not None:
+        return create_telemetry_context_from_request(request, event_context_param=event_context_param)
+    context_dict = parse_event_context_param(event_context_param)
     context_dict.update(extra_context)
-    
-    # Extract known fields from context
-    known_fields = {
-        "request_id": request_id,
-        "artifact_id": context_dict.pop("artifact", None),
-        "annotator_id": context_dict.pop("annotator", None),
-        "replica_id": context_dict.pop("replica", None),
-        "application_id": context_dict.pop("application", None),
-    }
-    
-    # Clean up known fields from context dict
-    for field in ["artifact", "annotator", "replica", "application"]:
-        context_dict.pop(field, None)
-    
-    # Use explicit values if provided, otherwise fall back to context dict
-    final_request_id = known_fields["request_id"] or context_dict.pop("request_id", None)
-    
     return EventContext(
         context=context_dict,
-        request_id=final_request_id,
-        artifact_id=known_fields["artifact_id"] or context_dict.pop("artifact_id", None),
-        annotator_id=known_fields["annotator_id"] or context_dict.pop("annotator_id", None),
-        replica_id=known_fields["replica_id"] or context_dict.pop("replica_id", None),
-        application_id=known_fields["application_id"] or context_dict.pop("application_id", None),
+        request_id=request_id or context_dict.pop("request_id", None),
+        artifact_id=context_dict.pop("artifact_id", context_dict.pop("artifact", None)),
+        annotator_id=context_dict.pop("annotator_id", context_dict.pop("annotator", None)),
+        replica_id=context_dict.pop("replica_id", context_dict.pop("replica", None)),
+        application_id=context_dict.pop("application_id", context_dict.pop("application", None)),
+        orchestrator_id=context_dict.pop("orchestrator_id", context_dict.pop("orchestrator", None)),
+        machine_id=context_dict.pop("machine_id", context_dict.pop("machine", None)),
+        component_id=context_dict.pop("component_id", context_dict.pop("component", None)),
+        pipeline_run_id=context_dict.pop("pipeline_run_id", context_dict.pop("pipeline_run", None)),
     )
