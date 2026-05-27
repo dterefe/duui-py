@@ -31,12 +31,19 @@
   "descriptor": {
     "name": "spacy-lua-msgpack",
     "version": "1.0.0",
-    "input": {
-      "types": {},
-      "text": {
-        "default": {
-          "types": {},
-          "mimeType": "text/plain; charset=utf-8",
+      "input": {
+        "types": {
+          "Sentence": [
+            "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence"
+          ],
+          "Token": [
+            "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token"
+          ]
+        },
+        "text": {
+          "default": {
+            "types": {},
+            "mimeType": "text/plain; charset=utf-8",
           "languages": [
             "x-unspecified"
           ]
@@ -65,6 +72,12 @@
         ],
         "NamedEntity": [
           "de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity"
+        ],
+        "SpacyAnnotatorMetaData": [
+          "org.texttechnologylab.annotation.SpacyAnnotatorMetaData"
+        ],
+        "ROOT": [
+          "de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.ROOT"
         ]
       },
       "text": {
@@ -87,6 +100,8 @@
       "enum": [
         "en_core_web_sm",
         "de_core_news_sm",
+        "en_core_web_trf",
+        "de_dep_news_trf",
         "fr_core_news_sm",
         "xx_ent_wiki_sm"
       ]
@@ -100,6 +115,11 @@
       "type": "boolean",
       "description": "Use existing sentences from CAS",
       "default": false
+    },
+    "spacy_batch_size": {
+      "type": "integer",
+      "description": "Batch size for sentence-window nlp.pipe processing",
+      "default": 32
     }
   }
 }
