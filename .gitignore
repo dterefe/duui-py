@@ -102,3 +102,4 @@ __pycache__/
 .cache/
 .dev/
 examples/duui-java-shell/target/*
+examples/gazetteer-legacy-lua/backend/resources/abbrv_skipgram/Bacteria_gbif_2021_bereinigt.csv.gz
