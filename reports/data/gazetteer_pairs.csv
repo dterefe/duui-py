@@ -1,0 +1,13 @@
+doc_id,chars,legacy_ms,modern_ms,legacy_count,modern_count,intersection,legacy_only,modern_only,equivalent,config
+3713534-chunk-1,2181,3.46,2.96,1,1,1,0,0,True,plain-de
+3713534-chunk-2,2086,2.64,3.17,0,0,0,0,0,True,plain-de
+3718079-chunk-1,1953,2.66,3.08,0,0,0,0,0,True,plain-de
+3718079-chunk-2,606,2.4,2.87,0,0,0,0,0,True,plain-de
+3720448-chunk-1,2148,3.35,2.94,1,1,1,0,0,True,plain-de
+3720448-chunk-2,2100,3.0,3.28,0,0,0,0,0,True,plain-de
+3713534-chunk-1,2181,3.41,2.92,0,0,0,0,0,True,virus-skipgram
+3713534-chunk-2,2086,2.82,3.3,0,0,0,0,0,True,virus-skipgram
+3718079-chunk-1,1953,2.85,4.21,0,0,0,0,0,True,virus-skipgram
+3718079-chunk-2,606,3.39,3.53,0,0,0,0,0,True,virus-skipgram
+3720448-chunk-1,2148,3.42,3.17,0,0,0,0,0,True,virus-skipgram
+3720448-chunk-2,2100,2.91,3.67,0,0,0,0,0,True,virus-skipgram

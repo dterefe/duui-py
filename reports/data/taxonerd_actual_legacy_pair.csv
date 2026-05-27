@@ -1,0 +1,15 @@
+variant,docs,elapsed ms per doc,median ms,speedup vs legacy,found,linked,failed,ANN ms,exact ms,cache hits/misses,variant_clean
+legacy-taxonerd-whole-document,2.0,1013 / 695,1013.0,1.0,220.0,220.0,0.0,0.0,0.0,0/0,legacy-taxonerd-whole-document
+async-taxonerd-legacy-procedure-gbif,2.0,802 / 1925,1925.0,0.526,220.0,220.0,0.0,0.0,0.0,0/0,async-taxonerd-legacy-procedure-gbif
+async-taxonerd-whole-document-gbif,2.0,7558 / 1111,7558.0,0.134,218.0,218.0,0.0,80.9,5.034,0/291,async-taxonerd-whole-document-gbif
+async-taxonerd-whole-document-gbif-linker-original,2.0,756 / 1035,1035.0,0.979,218.0,218.0,0.0,47.5,4.497,0/291,async-taxonerd-whole-document-gbif-linker-original
+async-taxonerd-whole-document-gbif-linker-batched,2.0,995 / 1540,1540.0,0.658,218.0,218.0,0.0,56.3,4.629,0/291,async-taxonerd-whole-document-gbif-linker-batched
+async-taxonerd-whole-document-gbif-linker-cached,2.0,731 / 1083,1083.0,0.935,218.0,218.0,0.0,0.0,5.443,291/0,async-taxonerd-whole-document-gbif-linker-cached
+async-taxonerd-legacy-compatible-gbif-linker-original-ef200,2.0,772 / 2267,2267.0,0.447,220.0,220.0,0.0,748.2,0.003,0/376,async-taxonerd-legacy-compatible-gbif-linker-original-ef200
+async-taxonerd-legacy-compatible-gbif-linker-batched-ef200,2.0,747 / 1098,1098.0,0.923,220.0,220.0,0.0,81.7,0.004,0/376,async-taxonerd-legacy-compatible-gbif-linker-batched-ef200
+async-taxonerd-legacy-compatible-gbif-linker-cached-ef200,2.0,743 / 1127,1127.0,0.899,220.0,220.0,0.0,69.1,0.003,0/376,async-taxonerd-legacy-compatible-gbif-linker-cached-ef200
+async-taxonerd-span-sentence-gbif,2.0,871 / 1187,1187.0,0.853,258.0,258.0,0.0,21.0,6.004,113/55,async-taxonerd-span-sentence-gbif
+async-taxonerd-span-paragraph-gbif,2.0,729 / 1141,1141.0,0.888,222.0,222.0,0.0,14.2,5.763,270/17,async-taxonerd-span-paragraph-gbif
+async-taxonerd-span-div-gbif,2.0,1453 / 1902,1902.0,0.533,275.0,275.0,0.0,358.3,9.23,347/32,async-taxonerd-span-div-gbif
+async-taxonerd-span-section-gbif,2.0,518 / 897,897.0,1.129,0.0,0.0,2.0,0.0,0.0,0/0,async-taxonerd-span-section-gbif
+async-taxonerd-span-title-gbif,2.0,500 / 1367,1367.0,0.741,0.0,0.0,2.0,0.0,0.0,0/0,async-taxonerd-span-title-gbif

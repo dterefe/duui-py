@@ -1,0 +1,9 @@
+config,event_type,count
+plain-de,log,28
+plain-de,metric,672
+plain-de,span,14
+plain-de,summary,14
+virus-skipgram,log,28
+virus-skipgram,metric,672
+virus-skipgram,span,14
+virus-skipgram,summary,14

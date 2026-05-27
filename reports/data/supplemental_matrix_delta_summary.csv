@@ -1,0 +1,5 @@
+annotator,python_codec_delta_ms,rust_codec_delta_ms,provenance
+spaCy,23.0,14.3,~/.codex/session-notes/projects/duui-alpha.md
+TaxoNERD GBIF,208.5,193.0,~/.codex/session-notes/projects/duui-alpha.md
+Gazetteer r15,9.0,21.0,~/.codex/session-notes/projects/duui-alpha.md
+GNFinder,806.3,831.7,~/.codex/session-notes/projects/duui-alpha.md

@@ -1,0 +1,10 @@
+variant,docs,median ms,mean ms,p95 ms,p99 ms,min ms,max ms,speedup vs legacy median,found,linked,failed,display
+legacy-taxonerd-whole-document,45.0,608.0,742.2,1216.0,1686.0,511.0,1686.0,1.0,916.0,916.0,0.0,Baseline
+async-taxonerd-whole-document-gbif,45.0,592.0,776.5,1484.0,2116.0,441.0,2116.0,1.027,914.0,914.0,0.0,Async whole document
+async-taxonerd-span-sentence-gbif,45.0,938.0,1017.1,1569.0,2061.0,328.0,2061.0,0.648,957.0,957.0,0.0,Async sentence spans
+async-taxonerd-span-sentence-nproc2-gbif,45.0,2549.0,2711.1,3774.0,3859.0,1636.0,3859.0,0.239,957.0,957.0,0.0,"Sentence spans, nproc=2"
+async-taxonerd-span-sentence-nproc4-gbif,45.0,3448.0,3515.2,4221.0,4796.0,2905.0,4796.0,0.176,957.0,957.0,0.0,"Sentence spans, nproc=4"
+async-taxonerd-span-sentence-merged-gbif,45.0,1493.0,1471.6,1761.0,2085.0,970.0,2085.0,0.407,915.0,915.0,0.0,Sentence spans merged
+async-taxonerd-span-paragraph-gbif,45.0,1586.0,1744.1,2929.0,2971.0,1209.0,2971.0,0.383,935.0,935.0,0.0,Async paragraph spans
+async-taxonerd-span-paragraph-nproc2-gbif,45.0,2582.0,2793.3,4213.0,4442.0,2261.0,4442.0,0.235,935.0,935.0,0.0,"Paragraph spans, nproc=2"
+async-taxonerd-span-paragraph-nproc4-gbif,45.0,3159.0,3255.5,3927.0,4370.0,2784.0,4370.0,0.192,935.0,935.0,0.0,"Paragraph spans, nproc=4"
