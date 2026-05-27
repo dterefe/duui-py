@@ -3,7 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import Any
 
-from duui_py.logging.core import get_event_logger_or_none
+from duui_py.logging.core import get_configured_event_logger
 from duui_py.models import DuuiError
 
 RETRYABLE_STATUSES = {408, 425, 429, 502, 503, 504}
@@ -22,7 +22,9 @@ class DuuiHttpError(Exception):
     ):
         self.status_code = int(status_code)
         self.message = message or _status_phrase(self.status_code)
-        self.retryable = self.status_code in RETRYABLE_STATUSES if retryable is None else retryable
+        self.retryable = (
+            self.status_code in RETRYABLE_STATUSES if retryable is None else retryable
+        )
         self.retry_after = retry_after
         self.detail = detail or {}
         self.cause = cause
@@ -91,7 +93,9 @@ def unprocessable(message: str, **detail: Any) -> None:
     fail(422, message, **detail)
 
 
-def too_many_requests(message: str, *, retry_after: int | None = None, **detail: Any) -> None:
+def too_many_requests(
+    message: str, *, retry_after: int | None = None, **detail: Any
+) -> None:
     fail(429, message, retry_after=retry_after, **detail)
 
 
@@ -112,7 +116,7 @@ def timeout(message: str, **detail: Any) -> None:
 
 
 async def log_duui_error(error: DuuiHttpError, *, operation: str | None = None) -> None:
-    logger = get_event_logger_or_none()
+    logger = get_configured_event_logger()
     if logger is None:
         return
     extra = {
@@ -132,7 +136,9 @@ async def log_duui_error(error: DuuiHttpError, *, operation: str | None = None) 
     )
 
 
-def wrap_exception(exc: BaseException, *, message: str = "Internal annotator error") -> DuuiHttpError:
+def wrap_exception(
+    exc: BaseException, *, message: str = "Internal annotator error"
+) -> DuuiHttpError:
     return DuuiHttpError(
         500,
         message,

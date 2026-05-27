@@ -21,10 +21,12 @@ from duui_py.logging import (
     set_event_context,
     ConsoleSink,
     EventSink,
+    OTLPSink,
     StreamSink,
 )
 from duui_py.models import AnnotatorConfig
 from duui_py.settings import set_settings_once
+from duui_py.telemetry import create_stream_identifiers_from_request, telemetry
 
 RequestT = TypeVar("RequestT")
 ResponseT = TypeVar("ResponseT")
@@ -37,8 +39,13 @@ EMPTY_TYPESYSTEM_XML = (
 
 def _validate_lua_communication_layer(codec: Codec[Any, Any]) -> None:
     content = codec.communication_layer_content()
-    if str(content.get("format", "")).lower() != "lua" or not str(content.get("spec", "")).strip():
-        raise RuntimeError("Invalid codec communication layer: expected non-empty Lua script")
+    if (
+        str(content.get("format", "")).lower() != "lua"
+        or not str(content.get("spec", "")).strip()
+    ):
+        raise RuntimeError(
+            "Invalid codec communication layer: expected non-empty Lua script"
+        )
 
 
 def _load_typesystem_xml(path: str, annotator_cls: type[Any]) -> bytes:
@@ -69,7 +76,9 @@ def create_app(
     settings = cfg.meta.settings
     codec: Codec[RequestT, ResponseT] = annotator.codec()
     _validate_lua_communication_layer(codec)
-    adapter = request_adapter or cast(RequestAdapter[RequestT, ResponseT], default_request_adapter(codec))
+    adapter = request_adapter or cast(
+        RequestAdapter[RequestT, ResponseT], default_request_adapter(codec)
+    )
 
     app = FastAPI(title=cfg.descriptor.name, version=cfg.descriptor.version)
     app.state.request_adapter = adapter
@@ -84,12 +93,20 @@ def create_app(
 
     @app.get("/v1/communication_layer")
     def get_communication_layer() -> Response:
-        return Response(content=str(codec.communication_layer_content()["spec"]), media_type="text/plain; charset=utf-8")
+        return Response(
+            content=str(codec.communication_layer_content()["spec"]),
+            media_type="text/plain; charset=utf-8",
+        )
 
     @app.get("/v1/details/input_output")
     def get_input_output() -> dict[str, Any]:
         d = cfg.descriptor
-        return {"name": d.name, "version": d.version, "input": d.input.model_dump(), "output": d.output.model_dump()}
+        return {
+            "name": d.name,
+            "version": d.version,
+            "input": d.input.model_dump(),
+            "output": d.output.model_dump(),
+        }
 
     @app.get("/v1/documentation")
     def get_documentation() -> dict[str, Any]:
@@ -105,11 +122,20 @@ def create_app(
 
     @app.post("/v1/process")
     async def post_process(request: Request) -> Response:
-        if logger is not None:
-            await logger.info("Process request started")
-        response = await adapter.handle(request, annotator, codec, cfg)
-        if logger is not None:
-            await logger.info("Process request completed successfully")
+        if not settings.logging.enabled:
+            return await adapter.handle(request, annotator, codec, cfg)
+
+        await telemetry.trace("Process request accepted", path=str(request.url.path))
+        try:
+            response = await adapter.handle(request, annotator, codec, cfg)
+        except Exception as exc:
+            await telemetry.critical(
+                "Process request failed before response",
+                exception=type(exc).__name__,
+                path=str(request.url.path),
+            )
+            raise
+        await telemetry.debug("Process response prepared", path=str(request.url.path))
         return response
 
     logging_settings = settings.logging
@@ -121,10 +147,16 @@ def create_app(
         sinks: list[EventSink] = [cast(EventSink, StreamSink(stream_manager))]
         if os.environ.get("DUUI_DEBUG_LOGGING"):
             sinks.append(cast(EventSink, ConsoleSink()))
+        otlp_endpoint = os.environ.get("DUUI_OTLP_ENDPOINT")
+        if otlp_endpoint:
+            sinks.append(cast(EventSink, OTLPSink(otlp_endpoint)))
 
         logger = configure_logger(
             sinks=sinks,
-            default_context={"annotator_name": cfg.descriptor.name, "annotator_version": cfg.descriptor.version},
+            default_context={
+                "annotator_name": cfg.descriptor.name,
+                "annotator_version": cfg.descriptor.version,
+            },
             annotator_descriptor=cfg.descriptor,
             start_background_worker=False,
         )
@@ -151,16 +183,14 @@ def create_app(
 
         @app.get("/v2/events")
         async def stream_events(request: Request) -> StreamingResponse:
-            identifiers = {
-                "annotator_id": request.query_params.get("annotator_id"),
-                "replica_id": request.query_params.get("replica_id"),
-                "application_id": request.query_params.get("application_id"),
-                "artifact_id": request.query_params.get("artifact_id"),
-                "request_id": request.query_params.get("request_id"),
-            }
+            identifiers = create_stream_identifiers_from_request(request)
             ttl_param = request.query_params.get("ttl_minutes")
-            ttl_minutes = int(ttl_param) if ttl_param else logging_settings.stream_timeout_minutes
-            stream = await stream_manager.open_stream(identifiers=identifiers, ttl_minutes=ttl_minutes)
+            ttl_minutes = (
+                int(ttl_param) if ttl_param else logging_settings.stream_timeout_minutes
+            )
+            stream = await stream_manager.open_stream(
+                identifiers=identifiers, ttl_minutes=ttl_minutes
+            )
 
             async def event_generator() -> AsyncIterator[bytes]:
                 try:
@@ -183,6 +213,7 @@ def create_app(
         async def event_context_middleware(request: Request, call_next):
             event_context_param = request.query_params.get("event-context")
             event_context = create_event_context_from_request(
+                request,
                 event_context_param=event_context_param,
                 request_id=request.headers.get("x-request-id"),
             )
