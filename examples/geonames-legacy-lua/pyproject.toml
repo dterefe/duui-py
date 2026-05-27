@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geonames-legacy-lua"
+version = "1.5.4"
+description = "Legacy GeoNames gazetteer custom-Lua service migrated to duui-py"
+requires-python = ">=3.10"
+dependencies = ["duui-py", "uvicorn[standard]>=0.27.0"]
+
+[tool.setuptools]
+py-modules = ["geonames_legacy_annotator"]

@@ -1,0 +1,2 @@
+duui-py
+uvicorn[standard]>=0.27.0

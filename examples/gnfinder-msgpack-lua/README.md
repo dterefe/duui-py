@@ -16,14 +16,18 @@ DUUI V1 text example using Python-native config, generated `MsgPackLuaCodec`, an
 ./start.sh
 ```
 
+The example calls the real `gnfinder` executable. Set `GNFINDER_BINARY` or the `gnfinder_binary` parameter if it is not on `PATH`.
+
 ## Output
 
-With `verify=true`, the annotator yields verified taxon annotations:
+The annotator yields GNFinder taxon annotations from the `names` array returned by `gnfinder`:
 
 ```text
+org.texttechnologylab.annotation.biofid.gnfinder.Taxon
+org.texttechnologylab.annotation.biofid.gnfinder.MetaData
 org.texttechnologylab.annotation.biofid.gnfinder.VerifiedTaxon
 org.texttechnologylab.annotation.AnnotatorMetaData
 org.texttechnologylab.annotation.DocumentModification
 ```
 
-With `verify=false`, it yields `org.texttechnologylab.annotation.biofid.gnfinder.Taxon`.
+When `verify=true` and GNFinder returns `verification.bestResult`, that name is emitted as `org.texttechnologylab.annotation.biofid.gnfinder.VerifiedTaxon`.

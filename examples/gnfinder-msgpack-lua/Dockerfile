@@ -1,6 +1,10 @@
+FROM docker.io/gnames/gnfinder:latest AS gnfinder-backend
+
 FROM python:3.11-slim
 
 WORKDIR /app
+
+COPY --from=gnfinder-backend /bin/gnfinder /usr/local/bin/gnfinder
 
 COPY . /app
 
