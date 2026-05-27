@@ -18,15 +18,6 @@ class V1RequestEnvelope(BaseModel):
     fs: list[FeatureStructure] = Field(default_factory=list)
 
 
-class DuuiResult(BaseModel):
-    sofa: Optional[SoFa] = None
-    annotations: list[Annotation] = Field(default_factory=list)
-    feature_structures: list[FeatureStructure] = Field(default_factory=list)
-    meta: Optional[AnnotatorMetaData] = None
-    modification_meta: Optional[DocumentModification] = None
-    errors: list[str] = Field(default_factory=list)
-
-
 class DuuiError(BaseModel):
     message: str
     status: int = 500
@@ -34,3 +25,12 @@ class DuuiError(BaseModel):
     retryable: bool = False
     retry_after: int | None = None
     detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class DuuiResult(BaseModel):
+    sofa: Optional[SoFa] = None
+    annotations: list[Annotation] = Field(default_factory=list)
+    feature_structures: list[FeatureStructure] = Field(default_factory=list)
+    meta: Optional[AnnotatorMetaData] = None
+    modification_meta: Optional[DocumentModification] = None
+    errors: list[str | DuuiError] = Field(default_factory=list)

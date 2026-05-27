@@ -19,10 +19,11 @@ This adapter:
 - reads the request with `request.stream()`
 - passes the byte stream to `codec.decode_request_stream(...)`
 - invokes the annotator
-- passes yielded items to `codec.encode_response_stream(...)`
-- returns a `StreamingResponse`
+- merges yielded items into one `DuuiResult`
+- serializes the complete result with `codec.encode_response(...)`
+- returns one response body
 
-It is the normal path for generated msgpack-lua examples. It does not call `await request.body()`.
+It is the normal path for generated msgpack-lua examples. It does not call `await request.body()`, but response serialization is intentionally completed before the HTTP response is returned.
 
 Optional limits for partial chunk buffering:
 
@@ -38,7 +39,7 @@ adapter = AsyncChunkedRequestAdapter(
 )
 ```
 
-`max_partial_buffer_bytes` protects incomplete chunk assembly. It is not a full request buffer.
+`max_partial_buffer_bytes` protects incomplete chunk assembly while reading the request stream. It is not a full request buffer.
 
 ## Synchronous Adapter
 
@@ -57,7 +58,8 @@ This adapter awaits the whole request body and returns one encoded response body
 
 If no adapter is passed to `create_app`, `default_request_adapter(codec)` uses:
 
-- `AsyncChunkedRequestAdapter` when the codec implements `decode_request_stream` and `encode_response_stream`
+- `AsyncChunkedRequestAdapter` when the codec implements `decode_request_stream` and `encode_response`
+- currently the async adapter only requires stream decoding on the request side; response serialization is whole-result
 - `SynchronousRequestAdapter` otherwise
 
 Examples pass the async adapter explicitly so the tested behavior is obvious at the app definition.

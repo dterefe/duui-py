@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import Any, Literal
+from typing_extensions import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -65,10 +66,29 @@ class LoggingSettings(BaseModel):
     stream_timeout_minutes: int = Field(default=5, ge=1, le=60)
     max_queue_size: int = Field(default=1000, ge=10, le=10000)
     metrics_collection_interval_seconds: int = Field(default=5, ge=1, le=300)
-    include_system_metrics: bool = True
-    include_process_metrics: bool = True
-    include_disk_metrics: bool = True
-    include_network_metrics: bool = True
+    include_system_metrics: bool = False
+    include_process_metrics: bool = False
+    include_disk_metrics: bool = False
+    include_network_metrics: bool = False
+    max_resource_sample_interval_ms: int = Field(default=60000, ge=100, le=60000)
+    default_telemetry_scopes: list[str] = Field(default_factory=lambda: ["global", "component", "replica"])
+    supported_telemetry_scopes: list[str] = Field(
+        default_factory=lambda: [
+            "global",
+            "machine",
+            "orchestrator",
+            "pipeline_run",
+            "component",
+            "replica",
+            "component_replica",
+            "orchestrator_component",
+            "request",
+            "artifact",
+        ]
+    )
+    default_histogram_buckets_ms: list[float] = Field(
+        default_factory=lambda: [1, 2, 5, 10, 25, 50, 75, 100, 150, 250, 500, 750, 1000, 1500, 2500, 5000, 10000]
+    )
 
 
 class FrameworkSettings(BaseModel):
@@ -197,6 +217,40 @@ class IODescriptor(BaseModel):
         return None
 
 
+WireProtocol = Literal[
+    "auto",
+    "msgpack-row-batch",
+    "msgpack-columnar",
+    "msgpack-windowed-columnar",
+    "runtime-msgpack-columnar",
+    "runtime-msgpack-windowed",
+    "runtime-msgpack-packed",
+    "runtime-msgpack-compressed",
+    "runtime-msgpack-direct",
+    "protobuf-batch",
+    "protobuf-windowed",
+    "compressed-msgpack-columnar",
+]
+WireCompression = Literal["none", "zlib", "lz4", "zstd-fast", "zstd-dict"]
+
+
+class WireWindowSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    maxRows: int = Field(default=4096, ge=1)
+    maxBytes: int = Field(default=1024 * 1024, ge=1024)
+    flushMs: int = Field(default=25, ge=0)
+
+
+class WireSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    protocol: WireProtocol = "auto"
+    window: WireWindowSettings = Field(default_factory=WireWindowSettings)
+    compression: WireCompression = "none"
+    features: dict[str, list[str]] = Field(default_factory=dict)
+
+
 class AnnotatorDescriptor(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -217,6 +271,7 @@ class AnnotatorConfig(BaseModel):
     descriptor: AnnotatorDescriptor
     typesystem_xml_path: str = "TypeSystem.xml"
     parameters_schema: Json = Field(default_factory=dict)
+    wire: WireSettings = Field(default_factory=WireSettings)
 
     @model_validator(mode="after")
     def validate_descriptor_patterns(self) -> Self:

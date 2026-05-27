@@ -385,7 +385,7 @@ class REL(FeatureStructure):
     Governor: Optional[UimaValue] = None
     flavor: Optional[str] = None
 
-class ROOT_type_dependency_ROOT(FeatureStructure):
+class ROOT_type_dependency_ROOT(Dependency):
     type: str = "de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.ROOT"
     DependencyType: Optional[str] = None
     Dependent: Optional[UimaValue] = None

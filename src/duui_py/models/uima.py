@@ -16,6 +16,10 @@ PackedInt64Array = TypedDict("PackedInt64Array", {"$i64": bytes})
 # Simplified type to avoid recursion issues in Pydantic
 # Original recursive type caused infinite recursion
 UimaValue = Any
+_CORE_FIELD_NAMES = frozenset({"ref", "type", "features", "begin", "end"})
+_FEATURE_FIELD_CACHE: dict[type, tuple[tuple[str, str], ...]] = {}
+_FEATURE_LOOKUP_CACHE: dict[type, dict[str, tuple[str, str]]] = {}
+_TYPE_NAME_CACHE: dict[type, str] = {}
 
 
 def is_feature_structure_ref(value: Any) -> bool:
@@ -39,8 +43,23 @@ def normalize_uima_value(value: Any) -> UimaValue:
     return value
 
 
+def uima_type_name(model_or_type: Any) -> str:
+    if isinstance(model_or_type, str):
+        return model_or_type
+    model_fields = getattr(model_or_type, "model_fields", None)
+    if isinstance(model_fields, dict):
+        field = model_fields.get("type")
+        default = getattr(field, "default", None)
+        if isinstance(default, str):
+            return default
+    type_value = getattr(model_or_type, "type", None)
+    if isinstance(type_value, str):
+        return type_value
+    raise TypeError(f"cannot resolve UIMA type name from {model_or_type!r}")
+
+
 class FeatureStructure(BaseModel):
-    model_config = ConfigDict(validate_assignment=True, populate_by_name=True)
+    model_config = ConfigDict(validate_assignment=False, populate_by_name=True)
 
     ref: Optional[int] = None
     type: str
@@ -50,7 +69,47 @@ class FeatureStructure(BaseModel):
 
     @classmethod
     def _core_field_names(cls) -> set[str]:
-        return {"ref", "type", "features", "begin", "end"}
+        return set(_CORE_FIELD_NAMES)
+
+    def __getattr__(self, name: str) -> Any:
+        feature = _feature_lookup(self.__class__).get(name)
+        if feature is not None:
+            field_name, feature_name = feature
+            model_fields = self.__class__.model_fields
+            if field_name in model_fields:
+                data = object.__getattribute__(self, "__dict__")
+                if field_name in data:
+                    return data[field_name]
+                features = data.get("features")
+                if isinstance(features, dict):
+                    if feature_name in features:
+                        return features[feature_name]
+                    if name in features:
+                        return features[name]
+                return None
+        return super().__getattr__(name)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name in _CORE_FIELD_NAMES:
+            return
+        feature = _feature_lookup(self.__class__).get(name)
+        if feature is None:
+            return
+        _, feature_name = feature
+        current = getattr(self, "features", None)
+        features = dict(current) if isinstance(current, dict) else {}
+        if value is None:
+            features.pop(feature_name, None)
+        else:
+            features[feature_name] = _normalize_if_needed(value)
+        object.__setattr__(self, "features", features)
+
+    def __init__(self, **values: Any) -> None:
+        if _fast_constructor_enabled(self.__class__):
+            _init_model_state(self, _fast_model_data(self.__class__, values))
+            return
+        self.__pydantic_validator__.validate_python(values, self_instance=self)
 
     @classmethod
     @model_validator(mode="before")
@@ -81,45 +140,35 @@ class FeatureStructure(BaseModel):
         return inflated
 
     def feature_map(self) -> dict[str, UimaValue]:
-        merged = {str(k): normalize_uima_value(v) for k, v in self.features.items()}
-
-        for field_name, field_info in self.__class__.model_fields.items():
-            if field_name in self._core_field_names():
-                continue
-
-            value = getattr(self, field_name, None)
-            if value is None:
-                continue
-
-            feature_name = field_info.alias if isinstance(field_info.alias, str) else field_name
-            merged[feature_name] = normalize_uima_value(value)
-
-        return merged
+        if isinstance(self.features, dict):
+            return self.features
+        return {}
 
     @model_validator(mode="after")
     def _sync_features_field(self) -> "FeatureStructure":
-        existing_features = (
-            {str(k): normalize_uima_value(v) for k, v in self.features.items()}
-            if isinstance(self.features, dict)
-            else {}
-        )
+        existing_features = {
+            str(k): _normalize_if_needed(v)
+            for k, v in self.features.items()
+        } if isinstance(self.features, dict) else {}
         for field_name, field_info in self.__class__.model_fields.items():
             if field_name in self._core_field_names():
                 continue
 
             current_value = getattr(self, field_name, None)
+            alias = field_info.alias if isinstance(field_info.alias, str) else field_name
             if current_value is not None:
+                existing_features[alias] = _normalize_if_needed(current_value)
                 continue
 
             aliases = [field_name]
-            if isinstance(field_info.alias, str) and field_info.alias != field_name:
-                aliases.append(field_info.alias)
+            if alias != field_name:
+                aliases.append(alias)
             for alias in aliases:
                 if alias in existing_features:
-                    object.__setattr__(self, field_name, normalize_uima_value(existing_features[alias]))
+                    object.__setattr__(self, field_name, existing_features[alias])
                     break
 
-        object.__setattr__(self, "features", self.feature_map())
+        object.__setattr__(self, "features", existing_features)
         return self
 
     @model_serializer(mode="wrap")
@@ -201,6 +250,117 @@ class SoFaAnnotationSpans(SoFaBase):
 
 
 SoFa = Annotated[SoFaText | SoFaBytes | SoFaURI | SoFaAnnotationSpans, Field(discriminator="kind")]
+
+
+def _feature_fields(model_cls: type[FeatureStructure]) -> tuple[tuple[str, str], ...]:
+    cached = _FEATURE_FIELD_CACHE.get(model_cls)
+    if cached is not None:
+        return cached
+    explicit = getattr(model_cls, "__duui_feature_fields__", None)
+    if isinstance(explicit, tuple):
+        cached = tuple((str(field), str(feature)) for field, feature in explicit)
+        _FEATURE_FIELD_CACHE[model_cls] = cached
+        return cached
+    core_names = model_cls._core_field_names()
+    fields: list[tuple[str, str]] = []
+    for field_name, field_info in model_cls.model_fields.items():
+        if field_name in core_names:
+            continue
+        feature_name = field_info.alias if isinstance(field_info.alias, str) else field_name
+        fields.append((field_name, feature_name))
+    cached = tuple(fields)
+    _FEATURE_FIELD_CACHE[model_cls] = cached
+    return cached
+
+
+def _feature_lookup(model_cls: type[FeatureStructure]) -> dict[str, tuple[str, str]]:
+    cached = _FEATURE_LOOKUP_CACHE.get(model_cls)
+    if cached is not None:
+        return cached
+    out: dict[str, tuple[str, str]] = {}
+    for field_name, feature_name in _feature_fields(model_cls):
+        pair = (field_name, feature_name)
+        out[field_name] = pair
+        out[feature_name] = pair
+    _FEATURE_LOOKUP_CACHE[model_cls] = out
+    return out
+
+
+def _fast_constructor_enabled(model_cls: type[FeatureStructure]) -> bool:
+    return not model_cls.__name__.startswith("SoFa")
+
+
+def _init_model_state(target: FeatureStructure, data: dict[str, Any]) -> None:
+    object.__setattr__(target, "__dict__", data)
+    object.__setattr__(target, "__pydantic_fields_set__", set(data))
+    object.__setattr__(target, "__pydantic_extra__", None)
+    object.__setattr__(target, "__pydantic_private__", None)
+
+
+def _fast_model_data(model_cls: type[FeatureStructure], values: dict[str, Any]) -> dict[str, Any]:
+    features = values.pop("features", None)
+    type_name = values.pop("type", None) or _type_name(model_cls)
+    data: dict[str, Any] = {
+        "ref": values.pop("ref", None),
+        "type": type_name,
+        "begin": values.pop("begin", None),
+        "end": values.pop("end", None),
+    }
+
+    feature_values: dict[str, Any] = {}
+    features_from_map = False
+    if isinstance(features, dict):
+        features_from_map = bool(features)
+        feature_values.update(
+            {
+                str(key): _normalize_if_needed(value)
+                for key, value in features.items()
+                if value is not None
+            }
+        )
+
+    lookup = _feature_lookup(model_cls)
+    model_field_names = model_cls.model_fields
+    for raw_name, raw_value in values.items():
+        if raw_value is None:
+            continue
+        field_name, feature_name = lookup.get(raw_name, (raw_name, raw_name))
+        value = _normalize_if_needed(raw_value)
+        if field_name in model_field_names:
+            data[field_name] = value
+        if field_name not in _CORE_FIELD_NAMES:
+            feature_values[feature_name] = value
+
+    if features_from_map:
+        for field_name, feature_name in _feature_fields(model_cls):
+            if field_name not in data and feature_name in feature_values:
+                data[field_name] = feature_values[feature_name]
+
+    data["features"] = feature_values
+    return data
+
+
+def _type_name(model_cls: type[FeatureStructure]) -> str:
+    cached = _TYPE_NAME_CACHE.get(model_cls)
+    if cached is not None:
+        return cached
+    explicit = getattr(model_cls, "__duui_type_name__", None)
+    if isinstance(explicit, str) and explicit:
+        _TYPE_NAME_CACHE[model_cls] = explicit
+        return explicit
+    type_field = model_cls.model_fields.get("type")
+    if type_field is not None and isinstance(type_field.default, str):
+        _TYPE_NAME_CACHE[model_cls] = type_field.default
+        return type_field.default
+    fallback = model_cls.__name__
+    _TYPE_NAME_CACHE[model_cls] = fallback
+    return fallback
+
+
+def _normalize_if_needed(value: Any) -> UimaValue:
+    if value is None or isinstance(value, (str, int, float, bool, bytes)):
+        return value
+    return normalize_uima_value(value)
 
 
 def sofa_default_for_mime(*, mime_type: str, language: str) -> SoFa:

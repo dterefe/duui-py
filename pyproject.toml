@@ -7,7 +7,7 @@ name = "duui-py"
 version = "0.1.0"
 description = "DUUI Python framework to build DUUI compatible Annotators"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Dawit Terefe" }]
 dependencies = [
