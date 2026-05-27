@@ -24,23 +24,29 @@ The stream handshake is instance/session scoped. Use stream identifiers such as
 `pipeline_run_id`. Task identifiers such as `artifact_id` and `request_id` are
 attached to `/v1/process` events, not required for opening the stream.
 
-## Logs
+## Annotator Telemetry
 
-Annotators use the normal event logger for human-readable lifecycle and debug messages. It is a no-op when event logging is not configured.
+Annotators use the `telemetry` facade for human-readable lifecycle logs and
+explicit counters, gauges, timings, and histograms. It is a no-op when event
+logging is not configured, while the adapter still adds request context,
+trace/span ids, scoped aggregation, resource samples, and summaries.
 
 ```python
-from duui_py.logging import get_event_logger_or_none
+from time import time
+
+from duui_py.telemetry import telemetry
 
 
 async def process(self, doc):
-    logger = get_event_logger_or_none()
-    if logger is not None:
-        await logger.info("GNFinder processing started", extra={"text_length": len(text)})
+    started = time()
+    await telemetry.info("GNFinder processing started", text_length=len(text))
 
     ...
 
-    if logger is not None:
-        await logger.info("GNFinder processing completed", extra={"matches": matches})
+    elapsed_ms = int((time() - started) * 1000)
+    await telemetry.count("gnfinder_taxon_matches", matches)
+    await telemetry.timing("gnfinder_processing_ms", elapsed_ms)
+    await telemetry.info("GNFinder processing completed", matches=matches, elapsed_ms=elapsed_ms)
 ```
 
 Example SSE log payload:
@@ -50,33 +56,10 @@ event: log
 data: {"type":"log","severity_text":"INFO","severity_number":9,"body":"GNFinder processing completed",...}
 ```
 
-## Metrics
-
-Annotators use the small `metrics` helper for counters, gauges, and timings.
-
-```python
-from time import time
-
-from duui_py.metrics import metrics
-
-
-async def process(self, doc):
-    started = time()
-    matches = 0
-
-    for item in find_matches(doc):
-        matches += 1
-        yield item
-
-    elapsed_ms = int((time() - started) * 1000)
-    await metrics.count("gnfinder_taxon_matches", matches)
-    await metrics.timing("gnfinder_processing_ms", elapsed_ms)
-```
-
 Timer form:
 
 ```python
-async with metrics.timer("geonames_backend_lookup_ms"):
+async with telemetry.timer("geonames_backend_lookup_ms"):
     response = await backend.lookup(payload)
 ```
 

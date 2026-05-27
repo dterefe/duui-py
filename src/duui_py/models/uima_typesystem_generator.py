@@ -238,7 +238,7 @@ def generate_models(source_root: Path, output_root: Path, clear_output: bool = T
         lines.append("")
         lines.append("from __future__ import annotations")
         lines.append("")
-        lines.append("from typing import Optional")
+        lines.append("from typing import ClassVar, Optional")
         lines.append("from pydantic import Field")
         lines.append("")
         lines.append("from duui_py.models.uima import Annotation, FeatureStructure, UimaValue")
@@ -255,8 +255,18 @@ def generate_models(source_root: Path, output_root: Path, clear_output: bool = T
             type_pairs.append((tname, cls))
 
             lines.append(f"class {cls}({base}):")
-            lines.append(f"    type: str = \"{tname}\"")
             all_features = _effective_features(tname)
+            feature_names = tuple(sorted(all_features))
+            feature_fields = tuple(
+                (_sanitize_identifier(fname), fname) for fname in sorted(all_features)
+            )
+            lines.append(f"    __duui_type_name__: ClassVar[str] = \"{tname}\"")
+            lines.append(f"    __duui_feature_names__: ClassVar[tuple[str, ...]] = {feature_names!r}")
+            lines.append(
+                "    __duui_feature_fields__: ClassVar[tuple[tuple[str, str], ...]] = "
+                f"{feature_fields!r}"
+            )
+            lines.append(f"    type: str = \"{tname}\"")
             if not all_features:
                 lines.append("    pass")
                 lines.append("")

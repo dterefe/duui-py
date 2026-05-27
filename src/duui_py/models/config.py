@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Self
+from typing import Any, Literal
+from typing_extensions import Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -216,6 +217,40 @@ class IODescriptor(BaseModel):
         return None
 
 
+WireProtocol = Literal[
+    "auto",
+    "msgpack-row-batch",
+    "msgpack-columnar",
+    "msgpack-windowed-columnar",
+    "runtime-msgpack-columnar",
+    "runtime-msgpack-windowed",
+    "runtime-msgpack-packed",
+    "runtime-msgpack-compressed",
+    "runtime-msgpack-direct",
+    "protobuf-batch",
+    "protobuf-windowed",
+    "compressed-msgpack-columnar",
+]
+WireCompression = Literal["none", "zlib", "lz4", "zstd-fast", "zstd-dict"]
+
+
+class WireWindowSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    maxRows: int = Field(default=4096, ge=1)
+    maxBytes: int = Field(default=1024 * 1024, ge=1024)
+    flushMs: int = Field(default=25, ge=0)
+
+
+class WireSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    protocol: WireProtocol = "auto"
+    window: WireWindowSettings = Field(default_factory=WireWindowSettings)
+    compression: WireCompression = "none"
+    features: dict[str, list[str]] = Field(default_factory=dict)
+
+
 class AnnotatorDescriptor(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -236,6 +271,7 @@ class AnnotatorConfig(BaseModel):
     descriptor: AnnotatorDescriptor
     typesystem_xml_path: str = "TypeSystem.xml"
     parameters_schema: Json = Field(default_factory=dict)
+    wire: WireSettings = Field(default_factory=WireSettings)
 
     @model_validator(mode="after")
     def validate_descriptor_patterns(self) -> Self:

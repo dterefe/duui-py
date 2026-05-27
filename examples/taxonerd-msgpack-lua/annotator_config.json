@@ -47,6 +47,9 @@
       "types": {
         "Taxon": [
           "org.texttechnologylab.annotation.type.Taxon"
+        ],
+        "AnnotationComment": [
+          "org.texttechnologylab.annotation.AnnotationComment"
         ]
       },
       "text": {

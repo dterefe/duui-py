@@ -70,6 +70,7 @@ class StreamConnection:
         except asyncio.QueueFull:
             try:
                 self._queue.get_nowait()
+                self._queue.task_done()
                 self._queue.put_nowait(event)
             except asyncio.QueueEmpty:
                 return
@@ -128,6 +129,9 @@ class StreamManager:
 
     def start(self) -> None:
         return None
+
+    def has_streams(self) -> bool:
+        return bool(self._streams)
 
     async def stop(self) -> None:
         async with self._lock:

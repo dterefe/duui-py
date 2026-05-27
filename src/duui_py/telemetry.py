@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+import inspect
 import json
 import os
 import socket
 import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from collections.abc import AsyncIterator
+from typing import Any, Awaitable, Callable, Literal, TypeVar, ParamSpec, cast
 from uuid import uuid4
 
 from fastapi import HTTPException, Request
@@ -19,6 +23,9 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
     psutil = None  # type: ignore[assignment]
+
+P = ParamSpec("P")
+R = TypeVar("R")
 
 
 TELEMETRY_PROTOCOL_VERSION = "duui-otel-0.1"
@@ -59,6 +66,7 @@ SUPPORTED_SCOPES = frozenset(
 )
 DEFAULT_SCOPES = ("global", "component", "replica")
 HIGH_CARDINALITY_SCOPES = frozenset({"request", "artifact"})
+_HOST_RESOURCE_ATTRIBUTES: dict[str, str] | None = None
 
 
 def now_unix_nano() -> int:
@@ -70,18 +78,43 @@ def new_span_id() -> str:
 
 
 def host_resource_attributes() -> dict[str, str]:
-    attrs = {
-        "service.name": os.environ.get("DUUI_SERVICE_NAME", "duui-py-annotator"),
-        "host.name": socket.gethostname(),
-        "process.pid": str(os.getpid()),
-        "telemetry.sdk.name": "duui-py",
-        "telemetry.protocol.version": TELEMETRY_PROTOCOL_VERSION,
-    }
+    global _HOST_RESOURCE_ATTRIBUTES
+    if _HOST_RESOURCE_ATTRIBUTES is None:
+        host_name = socket.gethostname()
+        attrs = {
+            "service.name": os.environ.get("DUUI_SERVICE_NAME", "duui-py-annotator"),
+            "host.name": host_name,
+            "process.pid": str(os.getpid()),
+            "telemetry.sdk.name": "duui-py",
+            "telemetry.protocol.version": TELEMETRY_PROTOCOL_VERSION,
+        }
+        try:
+            attrs["host.ip"] = socket.gethostbyname(host_name)
+        except OSError:
+            pass
+        _HOST_RESOURCE_ATTRIBUTES = attrs
+    return dict(_HOST_RESOURCE_ATTRIBUTES)
+
+
+def emit_background(awaitable: Awaitable[Any]) -> None:
     try:
-        attrs["host.ip"] = socket.gethostbyname(socket.gethostname())
-    except OSError:
-        pass
-    return attrs
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        close = getattr(awaitable, "close", None)
+        if callable(close):
+            close()
+        return
+    task = loop.create_task(awaitable)
+    task.add_done_callback(_consume_background_exception)
+
+
+def _consume_background_exception(task: asyncio.Task[Any]) -> None:
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        return
+    except Exception as exc:
+        print(f"Error emitting telemetry event: {exc}")
 
 
 def parse_traceparent(value: str | None) -> tuple[str | None, str | None]:
@@ -121,30 +154,45 @@ class TelemetryRequestConfig(BaseModel):
         try:
             raw = json.loads(value)
         except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"invalid X-DUUI-Telemetry JSON: {exc}") from exc
+            raise HTTPException(
+                status_code=400, detail=f"invalid X-DUUI-Telemetry JSON: {exc}"
+            ) from exc
         if not isinstance(raw, dict):
-            raise HTTPException(status_code=400, detail="X-DUUI-Telemetry must be a JSON object")
+            raise HTTPException(
+                status_code=400, detail="X-DUUI-Telemetry must be a JSON object"
+            )
 
         data = dict(raw)
         if "resource" in data:
-            data["resource"] = _validate_values("resource", data["resource"], SUPPORTED_RESOURCE_CATEGORIES)
+            data["resource"] = _validate_values(
+                "resource", data["resource"], SUPPORTED_RESOURCE_CATEGORIES
+            )
         if "stats" in data:
             data["stats"] = _validate_values("stats", data["stats"], SUPPORTED_STATS)
         if "scopes" in data:
-            data["scopes"] = _validate_values("scopes", data["scopes"], SUPPORTED_SCOPES)
+            data["scopes"] = _validate_values(
+                "scopes", data["scopes"], SUPPORTED_SCOPES
+            )
         return cls.model_validate(data)
 
 
-def _validate_values(field_name: str, value: object, allowed: frozenset[str]) -> tuple[str, ...]:
+def _validate_values(
+    field_name: str, value: object, allowed: frozenset[str]
+) -> tuple[str, ...]:
     if isinstance(value, str):
         values = (value,)
     elif isinstance(value, list | tuple | set):
         values = tuple(str(item) for item in value)
     else:
-        raise HTTPException(status_code=400, detail=f"telemetry {field_name} must be a string or list")
+        raise HTTPException(
+            status_code=400, detail=f"telemetry {field_name} must be a string or list"
+        )
     invalid = sorted(set(values).difference(allowed))
     if invalid:
-        raise HTTPException(status_code=400, detail=f"unsupported telemetry {field_name}: {', '.join(invalid)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"unsupported telemetry {field_name}: {', '.join(invalid)}",
+        )
     return tuple(values)
 
 
@@ -165,7 +213,9 @@ class TelemetryContext(BaseModel):
     parent_span_id: str | None = None
     span_id: str | None = None
     tracestate: str | None = None
-    telemetry: TelemetryRequestConfig = Field(default_factory=TelemetryRequestConfig.default)
+    telemetry: TelemetryRequestConfig = Field(
+        default_factory=TelemetryRequestConfig.default
+    )
 
     def otel_attributes(self) -> dict[str, str]:
         attrs = dict(self.context)
@@ -206,7 +256,9 @@ def create_telemetry_context_from_request(
 ) -> TelemetryContext:
     context_dict = parse_event_context_param(event_context_param)
     trace_id, parent_span_id = parse_traceparent(request.headers.get("traceparent"))
-    telemetry = TelemetryRequestConfig.from_header(request.headers.get("x-duui-telemetry"))
+    telemetry = TelemetryRequestConfig.from_header(
+        request.headers.get("x-duui-telemetry")
+    )
 
     def pick(*names: str) -> str | None:
         for name in names:
@@ -216,15 +268,24 @@ def create_telemetry_context_from_request(
         return None
 
     known = {
-        "request_id": pick("x-request-id", "x-duui-request-id") or context_dict.pop("request_id", None),
-        "artifact_id": pick("x-duui-artifact-id") or context_dict.pop("artifact_id", context_dict.pop("artifact", None)),
-        "annotator_id": pick("x-duui-annotator-id") or context_dict.pop("annotator_id", context_dict.pop("annotator", None)),
-        "replica_id": pick("x-duui-replica-id") or context_dict.pop("replica_id", context_dict.pop("replica", None)),
-        "application_id": pick("x-duui-application-id") or context_dict.pop("application_id", context_dict.pop("application", None)),
-        "orchestrator_id": pick("x-duui-orchestrator-id") or context_dict.pop("orchestrator_id", context_dict.pop("orchestrator", None)),
-        "machine_id": pick("x-duui-machine-id") or context_dict.pop("machine_id", context_dict.pop("machine", None)),
-        "component_id": pick("x-duui-component-id") or context_dict.pop("component_id", context_dict.pop("component", None)),
-        "pipeline_run_id": pick("x-duui-pipeline-run-id") or context_dict.pop("pipeline_run_id", context_dict.pop("pipeline_run", None)),
+        "request_id": pick("x-request-id", "x-duui-request-id")
+        or context_dict.pop("request_id", None),
+        "artifact_id": pick("x-duui-artifact-id")
+        or context_dict.pop("artifact_id", context_dict.pop("artifact", None)),
+        "annotator_id": pick("x-duui-annotator-id")
+        or context_dict.pop("annotator_id", context_dict.pop("annotator", None)),
+        "replica_id": pick("x-duui-replica-id")
+        or context_dict.pop("replica_id", context_dict.pop("replica", None)),
+        "application_id": pick("x-duui-application-id")
+        or context_dict.pop("application_id", context_dict.pop("application", None)),
+        "orchestrator_id": pick("x-duui-orchestrator-id")
+        or context_dict.pop("orchestrator_id", context_dict.pop("orchestrator", None)),
+        "machine_id": pick("x-duui-machine-id")
+        or context_dict.pop("machine_id", context_dict.pop("machine", None)),
+        "component_id": pick("x-duui-component-id")
+        or context_dict.pop("component_id", context_dict.pop("component", None)),
+        "pipeline_run_id": pick("x-duui-pipeline-run-id")
+        or context_dict.pop("pipeline_run_id", context_dict.pop("pipeline_run", None)),
     }
 
     return TelemetryContext(
@@ -311,7 +372,9 @@ class ScopeAggregation:
 class AggregationStore:
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._store: dict[tuple[str, tuple[tuple[str, str], ...]], ScopeAggregation] = {}
+        self._store: dict[tuple[str, tuple[tuple[str, str], ...]], ScopeAggregation] = (
+            {}
+        )
 
     async def record(
         self,
@@ -355,15 +418,24 @@ class ScopeRegistry:
         add("machine", **{"duui.machine_id": context.machine_id})
         add("orchestrator", **{"duui.orchestrator_id": context.orchestrator_id})
         add("pipeline_run", **{"duui.pipeline_run_id": context.pipeline_run_id})
-        add("component", **{"duui.component_id": context.component_id or context.annotator_id})
+        add(
+            "component",
+            **{"duui.component_id": context.component_id or context.annotator_id},
+        )
         add("replica", **{"duui.replica_id": context.replica_id})
         add(
             "component_replica",
-            **{"duui.component_id": context.component_id or context.annotator_id, "duui.replica_id": context.replica_id},
+            **{
+                "duui.component_id": context.component_id or context.annotator_id,
+                "duui.replica_id": context.replica_id,
+            },
         )
         add(
             "orchestrator_component",
-            **{"duui.orchestrator_id": context.orchestrator_id, "duui.component_id": context.component_id or context.annotator_id},
+            **{
+                "duui.orchestrator_id": context.orchestrator_id,
+                "duui.component_id": context.component_id or context.annotator_id,
+            },
         )
         add("request", **{"duui.request_id": context.request_id})
         add("artifact", **{"duui.artifact_id": context.artifact_id})
@@ -420,7 +492,15 @@ class ResourceSampler:
         if "network" in self.categories:
             self.samples.extend(self._network(interval_ms))
 
-    def _metric(self, category: str, name: str, value: float, unit: str, interval_ms: int, **attrs: str) -> dict[str, Any]:
+    def _metric(
+        self,
+        category: str,
+        name: str,
+        value: float,
+        unit: str,
+        interval_ms: int,
+        **attrs: str,
+    ) -> dict[str, Any]:
         return {
             "category": category,
             "name": name,
@@ -433,22 +513,103 @@ class ResourceSampler:
     def _cpu(self, interval_ms: int) -> list[dict[str, Any]]:
         out = []
         if self._process is not None:
-            out.append(self._metric("cpu", "process.cpu.utilization", float(self._process.cpu_percent(None)), "percent", interval_ms, scope="process"))
+            out.append(
+                self._metric(
+                    "cpu",
+                    "process.cpu.utilization",
+                    float(self._process.cpu_percent(None)),
+                    "percent",
+                    interval_ms,
+                    scope="process",
+                )
+            )
             times = self._process.cpu_times()
-            out.append(self._metric("cpu", "process.cpu.time.user", float(times.user), "seconds", interval_ms, scope="process"))
-            out.append(self._metric("cpu", "process.cpu.time.system", float(times.system), "seconds", interval_ms, scope="process"))
+            out.append(
+                self._metric(
+                    "cpu",
+                    "process.cpu.time.user",
+                    float(times.user),
+                    "seconds",
+                    interval_ms,
+                    scope="process",
+                )
+            )
+            out.append(
+                self._metric(
+                    "cpu",
+                    "process.cpu.time.system",
+                    float(times.system),
+                    "seconds",
+                    interval_ms,
+                    scope="process",
+                )
+            )
             try:
                 ctx = self._process.num_ctx_switches()
-                out.append(self._metric("cpu", "process.context_switches.voluntary", float(ctx.voluntary), "count", interval_ms, scope="process"))
-                out.append(self._metric("cpu", "process.context_switches.involuntary", float(ctx.involuntary), "count", interval_ms, scope="process"))
+                out.append(
+                    self._metric(
+                        "cpu",
+                        "process.context_switches.voluntary",
+                        float(ctx.voluntary),
+                        "count",
+                        interval_ms,
+                        scope="process",
+                    )
+                )
+                out.append(
+                    self._metric(
+                        "cpu",
+                        "process.context_switches.involuntary",
+                        float(ctx.involuntary),
+                        "count",
+                        interval_ms,
+                        scope="process",
+                    )
+                )
             except Exception:
                 pass
-        out.append(self._metric("cpu", "system.cpu.utilization", float(psutil.cpu_percent(None)), "percent", interval_ms, scope="system"))
+        out.append(
+            self._metric(
+                "cpu",
+                "system.cpu.utilization",
+                float(psutil.cpu_percent(None)),
+                "percent",
+                interval_ms,
+                scope="system",
+            )
+        )
         try:
             one, five, fifteen = psutil.getloadavg()
-            out.append(self._metric("cpu", "system.load_average.1m", float(one), "load", interval_ms, scope="system"))
-            out.append(self._metric("cpu", "system.load_average.5m", float(five), "load", interval_ms, scope="system"))
-            out.append(self._metric("cpu", "system.load_average.15m", float(fifteen), "load", interval_ms, scope="system"))
+            out.append(
+                self._metric(
+                    "cpu",
+                    "system.load_average.1m",
+                    float(one),
+                    "load",
+                    interval_ms,
+                    scope="system",
+                )
+            )
+            out.append(
+                self._metric(
+                    "cpu",
+                    "system.load_average.5m",
+                    float(five),
+                    "load",
+                    interval_ms,
+                    scope="system",
+                )
+            )
+            out.append(
+                self._metric(
+                    "cpu",
+                    "system.load_average.15m",
+                    float(fifteen),
+                    "load",
+                    interval_ms,
+                    scope="system",
+                )
+            )
         except Exception:
             pass
         return out
@@ -457,22 +618,94 @@ class ResourceSampler:
         out = []
         if self._process is not None:
             info = self._process.memory_info()
-            out.append(self._metric("memory", "process.memory.rss", float(info.rss), "bytes", interval_ms, scope="process"))
-            out.append(self._metric("memory", "process.memory.vms", float(info.vms), "bytes", interval_ms, scope="process"))
+            out.append(
+                self._metric(
+                    "memory",
+                    "process.memory.rss",
+                    float(info.rss),
+                    "bytes",
+                    interval_ms,
+                    scope="process",
+                )
+            )
+            out.append(
+                self._metric(
+                    "memory",
+                    "process.memory.vms",
+                    float(info.vms),
+                    "bytes",
+                    interval_ms,
+                    scope="process",
+                )
+            )
             try:
                 full = self._process.memory_full_info()
                 uss = getattr(full, "uss", None)
                 if uss is not None:
-                    out.append(self._metric("memory", "process.memory.uss", float(uss), "bytes", interval_ms, scope="process"))
+                    out.append(
+                        self._metric(
+                            "memory",
+                            "process.memory.uss",
+                            float(uss),
+                            "bytes",
+                            interval_ms,
+                            scope="process",
+                        )
+                    )
             except Exception:
                 pass
         virtual = psutil.virtual_memory()
         swap = psutil.swap_memory()
-        out.append(self._metric("memory", "system.memory.used", float(virtual.used), "bytes", interval_ms, scope="system"))
-        out.append(self._metric("memory", "system.memory.available", float(virtual.available), "bytes", interval_ms, scope="system"))
-        out.append(self._metric("memory", "system.memory.utilization", float(virtual.percent), "percent", interval_ms, scope="system"))
-        out.append(self._metric("memory", "system.swap.used", float(swap.used), "bytes", interval_ms, scope="system"))
-        out.append(self._metric("memory", "system.swap.utilization", float(swap.percent), "percent", interval_ms, scope="system"))
+        out.append(
+            self._metric(
+                "memory",
+                "system.memory.used",
+                float(virtual.used),
+                "bytes",
+                interval_ms,
+                scope="system",
+            )
+        )
+        out.append(
+            self._metric(
+                "memory",
+                "system.memory.available",
+                float(virtual.available),
+                "bytes",
+                interval_ms,
+                scope="system",
+            )
+        )
+        out.append(
+            self._metric(
+                "memory",
+                "system.memory.utilization",
+                float(virtual.percent),
+                "percent",
+                interval_ms,
+                scope="system",
+            )
+        )
+        out.append(
+            self._metric(
+                "memory",
+                "system.swap.used",
+                float(swap.used),
+                "bytes",
+                interval_ms,
+                scope="system",
+            )
+        )
+        out.append(
+            self._metric(
+                "memory",
+                "system.swap.utilization",
+                float(swap.percent),
+                "percent",
+                interval_ms,
+                scope="system",
+            )
+        )
         return out
 
     def _disk(self, interval_ms: int) -> list[dict[str, Any]]:
@@ -480,12 +713,41 @@ class ResourceSampler:
         out = []
         if current:
             for key, value in current.items():
-                out.append(self._metric("disk", f"system.disk.{key}", value, "count" if key.endswith("count") else "bytes", interval_ms, scope="system"))
+                out.append(
+                    self._metric(
+                        "disk",
+                        f"system.disk.{key}",
+                        value,
+                        "count" if key.endswith("count") else "bytes",
+                        interval_ms,
+                        scope="system",
+                    )
+                )
             self._last_disk = current
         try:
             usage = psutil.disk_usage("/")
-            out.append(self._metric("disk", "system.filesystem.utilization", float(usage.percent), "percent", interval_ms, scope="system", mount="/"))
-            out.append(self._metric("disk", "system.filesystem.used", float(usage.used), "bytes", interval_ms, scope="system", mount="/"))
+            out.append(
+                self._metric(
+                    "disk",
+                    "system.filesystem.utilization",
+                    float(usage.percent),
+                    "percent",
+                    interval_ms,
+                    scope="system",
+                    mount="/",
+                )
+            )
+            out.append(
+                self._metric(
+                    "disk",
+                    "system.filesystem.used",
+                    float(usage.used),
+                    "bytes",
+                    interval_ms,
+                    scope="system",
+                    mount="/",
+                )
+            )
         except Exception:
             pass
         return out
@@ -495,7 +757,16 @@ class ResourceSampler:
         out = []
         if current:
             for key, value in current.items():
-                out.append(self._metric("network", f"system.network.{key}", value, "count" if not key.endswith("bytes") else "bytes", interval_ms, scope="system"))
+                out.append(
+                    self._metric(
+                        "network",
+                        f"system.network.{key}",
+                        value,
+                        "count" if not key.endswith("bytes") else "bytes",
+                        interval_ms,
+                        scope="system",
+                    )
+                )
             self._last_net = current
         return out
 
@@ -541,6 +812,8 @@ class TelemetryRecorder:
         self.started_ns = now_unix_nano()
         self.started_monotonic = time.perf_counter()
         self.phase_ms: dict[str, float] = {}
+        self.extra_attributes: dict[str, str] = {}
+        self.extra_metrics: list[tuple[str, str, float, str, int, dict[str, str]]] = []
         self.sampler = ResourceSampler(self.context)
 
     async def start(self) -> None:
@@ -549,54 +822,316 @@ class TelemetryRecorder:
     def mark(self, name: str, elapsed_ms: float) -> None:
         self.phase_ms[name] = elapsed_ms
 
-    async def finish(self, *, status_code: int = 200, error: BaseException | None = None) -> None:
-        from duui_py.logging.core import get_event_logger_or_none
+    def attributes(self, values: dict[str, str]) -> None:
+        self.extra_attributes.update(values)
 
+    def metrics(
+        self, values: list[tuple[str, str, float, str, int, dict[str, str]]]
+    ) -> None:
+        self.extra_metrics.extend(values)
+
+    async def finish(
+        self, *, status_code: int = 200, error: BaseException | None = None
+    ) -> None:
+        from duui_py.logging.core import get_configured_event_logger
+
+        logger = get_configured_event_logger()
+        has_active_sinks = logger is not None and logger.has_active_sinks()
         resource_samples = await self.sampler.stop()
-        logger = get_event_logger_or_none()
-        if logger is None:
+        if not has_active_sinks or logger is None:
             return
         duration_ms = (time.perf_counter() - self.started_monotonic) * 1000.0
         scopes = ScopeRegistry.scopes(self.context)
         is_error = error is not None or status_code >= 400
 
         for sample in resource_samples:
-            await logger.metric(
-                sample["category"],
-                sample["name"],
-                sample["value"],
-                sample["unit"],
-                sample["interval_ms"],
-                {**sample["attributes"], **self.context.otel_attributes()},
+            emit_background(
+                logger.metric(
+                    sample["category"],
+                    sample["name"],
+                    sample["value"],
+                    sample["unit"],
+                    sample["interval_ms"],
+                    {**sample["attributes"], **self.context.otel_attributes()},
+                )
             )
 
-        aggregates = await aggregation_store.record("duui.request.duration", duration_ms, scopes, error=is_error)
+        for category, name, value, unit, interval_ms, attrs in self.extra_metrics:
+            emit_background(
+                logger.metric(
+                    category,
+                    name,
+                    value,
+                    unit,
+                    interval_ms,
+                    {**attrs, **self.context.otel_attributes()},
+                )
+            )
+
+        aggregates = await aggregation_store.record(
+            "duui.request.duration", duration_ms, scopes, error=is_error
+        )
         for scope_attrs, aggregate in aggregates:
             elapsed = max(time.monotonic() - aggregate.started_monotonic, 0.001)
-            tags = {**scope_attrs, **self.context.otel_attributes(), "status_code": str(status_code)}
-            if "duration" in self.context.telemetry.stats:
-                await logger.metric("request", "duui.request.duration", duration_ms, "milliseconds", int(duration_ms), tags)
-            if "histogram" in self.context.telemetry.stats:
-                await logger.histogram("request", "duui.request.duration.histogram", aggregate.histogram.snapshot(), "milliseconds", tags)
-            if "throughput" in self.context.telemetry.stats:
-                await logger.metric("request", "duui.request.throughput", aggregate.count / elapsed, "requests_per_second", 0, tags)
-                await logger.metric("request", "duui.request.count", float(aggregate.count), "count", 0, tags)
-                if aggregate.error_count:
-                    await logger.metric("request", "duui.request.errors", float(aggregate.error_count), "count", 0, tags)
-
-        await logger.span(
-            name=self.operation,
-            start_time_unix_nano=self.started_ns,
-            end_time_unix_nano=now_unix_nano(),
-            status_code=status_code,
-            attributes={**self.context.otel_attributes(), **{f"duui.phase.{key}_ms": str(int(value)) for key, value in self.phase_ms.items()}},
-        )
-        await logger.summary(
-            name="duui.request.summary",
-            attributes={
+            tags = {
+                **scope_attrs,
                 **self.context.otel_attributes(),
                 "status_code": str(status_code),
-                "duration_ms": str(int(duration_ms)),
-                **{f"{key}_ms": str(int(value)) for key, value in self.phase_ms.items()},
-            },
+            }
+            if "duration" in self.context.telemetry.stats:
+                emit_background(
+                    logger.metric(
+                        "request",
+                        "duui.request.duration",
+                        duration_ms,
+                        "milliseconds",
+                        int(duration_ms),
+                        tags,
+                    )
+                )
+            if "histogram" in self.context.telemetry.stats:
+                emit_background(
+                    logger.histogram(
+                        "request",
+                        "duui.request.duration.histogram",
+                        aggregate.histogram.snapshot(),
+                        "milliseconds",
+                        tags,
+                    )
+                )
+            if "throughput" in self.context.telemetry.stats:
+                emit_background(
+                    logger.metric(
+                        "request",
+                        "duui.request.throughput",
+                        aggregate.count / elapsed,
+                        "requests_per_second",
+                        0,
+                        tags,
+                    )
+                )
+                emit_background(
+                    logger.metric(
+                        "request",
+                        "duui.request.count",
+                        float(aggregate.count),
+                        "count",
+                        0,
+                        tags,
+                    )
+                )
+                if aggregate.error_count:
+                    emit_background(
+                        logger.metric(
+                            "request",
+                            "duui.request.errors",
+                            float(aggregate.error_count),
+                            "count",
+                            0,
+                            tags,
+                        )
+                    )
+
+        emit_background(
+            logger.span(
+                name=self.operation,
+                start_time_unix_nano=self.started_ns,
+                end_time_unix_nano=now_unix_nano(),
+                status_code=status_code,
+                attributes={
+                    **self.context.otel_attributes(),
+                    **{
+                        f"duui.phase.{key}_ms": str(int(value))
+                        for key, value in self.phase_ms.items()
+                    },
+                    **self.extra_attributes,
+                },
+            )
         )
+        emit_background(
+            logger.summary(
+                name="duui.request.summary",
+                attributes={
+                    **self.context.otel_attributes(),
+                    "status_code": str(status_code),
+                    "duration_ms": str(int(duration_ms)),
+                    **{
+                        f"{key}_ms": str(int(value))
+                        for key, value in self.phase_ms.items()
+                    },
+                    **self.extra_attributes,
+                },
+            )
+        )
+
+
+class Telemetry:
+    async def log(self, level: str, message: str, **attributes: Any) -> None:
+        from duui_py.logging.core import LogLevel, get_configured_event_logger
+
+        logger = get_configured_event_logger()
+        if logger is None or not logger.has_active_sinks():
+            return
+        normalized = LogLevel[level.upper()]
+        emit_background(logger.log(normalized, message, **attributes))
+
+    async def debug(self, message: str, **attributes: Any) -> None:
+        await self.log("DEBUG", message, **attributes)
+
+    async def trace(self, message: str, **attributes: Any) -> None:
+        await self.log("TRACE", message, **attributes)
+
+    async def info(self, message: str, **attributes: Any) -> None:
+        await self.log("INFO", message, **attributes)
+
+    async def warning(self, message: str, **attributes: Any) -> None:
+        await self.log("WARNING", message, **attributes)
+
+    async def error(self, message: str, **attributes: Any) -> None:
+        await self.log("ERROR", message, **attributes)
+
+    async def critical(self, message: str, **attributes: Any) -> None:
+        await self.log("CRITICAL", message, **attributes)
+
+    async def count(self, name: str, value: float = 1, **attributes: str) -> None:
+        await self.metric("processing", name, value, "count", **attributes)
+
+    async def gauge(
+        self, name: str, value: float, unit: str = "value", **attributes: str
+    ) -> None:
+        await self.metric("processing", name, value, unit, **attributes)
+
+    async def timing(
+        self, name: str, elapsed_ms: int | float, **attributes: str
+    ) -> None:
+        await self.metric(
+            "processing",
+            name,
+            float(elapsed_ms),
+            "milliseconds",
+            interval_ms=int(elapsed_ms),
+            **attributes,
+        )
+
+    async def metric(
+        self,
+        category: str,
+        name: str,
+        value: float,
+        unit: str,
+        *,
+        interval_ms: int = 0,
+        **attributes: str,
+    ) -> None:
+        from duui_py.logging.core import get_configured_event_logger
+
+        logger = get_configured_event_logger()
+        if logger is None or not logger.has_active_sinks():
+            return
+        emit_background(
+            logger.metric(category, name, value, unit, interval_ms, attributes)
+        )
+
+    async def histogram(
+        self,
+        category: str,
+        name: str,
+        histogram: dict[str, Any],
+        unit: str = "milliseconds",
+        **attributes: str,
+    ) -> None:
+        from duui_py.logging.core import get_configured_event_logger
+
+        logger = get_configured_event_logger()
+        if logger is None or not logger.has_active_sinks():
+            return
+        emit_background(
+            logger.histogram(category, name, histogram, unit, attributes)
+        )
+
+    @asynccontextmanager
+    async def timer(self, name: str, **attributes: str) -> AsyncIterator[None]:
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            await self.timing(name, elapsed_ms, **attributes)
+
+    def timed(
+        self,
+        name: str,
+        *,
+        category: str = "processing",
+        unit: str = "milliseconds",
+        **attributes: str,
+    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
+        def decorate(func: Callable[P, R]) -> Callable[P, R]:
+            if inspect.isasyncgenfunction(func):
+                @functools.wraps(func)
+                async def async_iter_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+                    started = time.perf_counter()
+                    try:
+                        async for value in cast(Any, func)(*args, **kwargs):
+                            yield value
+                    finally:
+                        elapsed_ms = (time.perf_counter() - started) * 1000.0
+                        await self.metric(
+                            category,
+                            name,
+                            elapsed_ms,
+                            unit,
+                            interval_ms=int(elapsed_ms),
+                            **attributes,
+                        )
+
+                return cast(Callable[P, R], async_iter_wrapper)
+
+            if asyncio.iscoroutinefunction(func):
+                @functools.wraps(func)
+                async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
+                    started = time.perf_counter()
+                    try:
+                        return await cast(Any, func)(*args, **kwargs)
+                    finally:
+                        elapsed_ms = (time.perf_counter() - started) * 1000.0
+                        await self.metric(
+                            category,
+                            name,
+                            elapsed_ms,
+                            unit,
+                            interval_ms=int(elapsed_ms),
+                            **attributes,
+                        )
+
+                return cast(Callable[P, R], async_wrapper)
+
+            @functools.wraps(func)
+            def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+                started = time.perf_counter()
+                try:
+                    return func(*args, **kwargs)
+                finally:
+                    elapsed_ms = (time.perf_counter() - started) * 1000.0
+                    try:
+                        loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        pass
+                    else:
+                        loop.create_task(
+                            self.metric(
+                                category,
+                                name,
+                                elapsed_ms,
+                                unit,
+                                interval_ms=int(elapsed_ms),
+                                **attributes,
+                            )
+                        )
+
+            return sync_wrapper
+
+        return decorate
+
+
+telemetry = Telemetry()

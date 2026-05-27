@@ -77,6 +77,28 @@
             <supertypeName>org.texttechnologylab.annotation.NamedEntity</supertypeName>
         </typeDescription>
         <typeDescription>
+            <name>org.texttechnologylab.annotation.AnnotationComment</name>
+            <description/>
+            <supertypeName>uima.cas.AnnotationBase</supertypeName>
+            <features>
+                <featureDescription>
+                    <name>reference</name>
+                    <description/>
+                    <rangeTypeName>uima.cas.TOP</rangeTypeName>
+                </featureDescription>
+                <featureDescription>
+                    <name>key</name>
+                    <description/>
+                    <rangeTypeName>uima.cas.String</rangeTypeName>
+                </featureDescription>
+                <featureDescription>
+                    <name>value</name>
+                    <description/>
+                    <rangeTypeName>uima.cas.String</rangeTypeName>
+                </featureDescription>
+            </features>
+        </typeDescription>
+        <typeDescription>
             <name>org.texttechnologylab.annotation.type.concept.Taxon</name>
             <description/>
             <supertypeName>org.texttechnologylab.annotation.AbstractNamedEntity</supertypeName>

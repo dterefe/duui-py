@@ -7,13 +7,61 @@ AnnotationComment = luajava.bindClass("org.texttechnologylab.annotation.Annotati
 -- Inputs:
 --  - inputCas: The actual CAS object to serialize
 --  - outputStream: Stream that is sent to the annotator, can be e.g. a string, JSON payload, ...
-function serialize(inputCas, outputStream)
+local function parse_list_string(str)
+    if str == nil or str == "[]" then
+        return {}
+    end
+    local t = {}
+    str = str:gsub("^%[", ""):gsub("%]$", "")
+    for item in str:gmatch("'(.-)'") do
+        table.insert(t, item)
+    end
+    if #t == 0 then
+        for item in str:gmatch("[^,]+") do
+            item = item:gsub("^%s+", ""):gsub("%s+$", ""):gsub("^\"", ""):gsub("\"$", "")
+            if item ~= "" then
+                table.insert(t, item)
+            end
+        end
+    end
+    return t
+end
+
+function serialize(inputCas, outputStream, params)
     -- Get data from CAS
     local doc_text = inputCas:getDocumentText()
+    local linking = "gbif_backbone"
+    local threshold = 0.7
+    local exclude = {'tagger', 'parser', 'taxo_abbrev_detector', 'taxon_linker', 'pysbd_sentencizer'}
+    local model = "en_ner_eco_md"
+
+    if params ~= nil then
+        if params["linking"] ~= nil then
+            linking = params["linking"]
+        end
+        if params["threshold"] ~= nil then
+            threshold = params["threshold"]
+        end
+        if params["model"] ~= nil then
+            model = params["model"]
+        end
+        if params["exclude"] ~= nil then
+            local parsed = parse_list_string(params["exclude"])
+            if #parsed > 0 then
+                exclude = parsed
+            else
+                exclude = {}
+            end
+        end
+    end
 
 -- Encode data as JSON object and write to stream
     outputStream:write(json.encode({
-        text = doc_text
+        text = doc_text,
+        linking = linking,
+        threshold = threshold,
+        exclude = exclude,
+        model = model
     }))
 end
 
@@ -29,7 +77,6 @@ function deserialize(inputCas, inputStream)
 
     -- Parse JSON data from string into object
     local results = json.decode(inputString)
-    print("TaxoNERD:")
     -- Add modification annotation
     local modification_meta = results["modification_meta"]
     local modification_anno = luajava.newInstance("org.texttechnologylab.annotation.DocumentModification", inputCas)
@@ -49,14 +96,11 @@ function deserialize(inputCas, inputStream)
     -- Add taxons
     for i, tax in ipairs(results["taxons"]) do
         if tax["write_token"] then
-            print("----------------")
             local taxon_anno = luajava.newInstance("org.texttechnologylab.annotation.type.Taxon", inputCas)
             taxon_anno:setBegin(tax["begin"])
             taxon_anno:setEnd(tax["end"])
             taxon_anno:setValue(tax["text"])
             taxon_anno:addToIndexes()
-
-            print(taxon_anno)
 
             -- Create meta data for this taxon
             local meta_anno = luajava.newInstance("org.texttechnologylab.annotation.AnnotatorMetaData", inputCas)
@@ -66,8 +110,6 @@ function deserialize(inputCas, inputStream)
             meta_anno:setModelName(meta["modelName"])
             meta_anno:setModelVersion(meta["modelVersion"])
             meta_anno:addToIndexes()
-
-            print(meta_anno)
 
             -- Add annotation comment for this taxon
             local anno_comment = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
@@ -93,11 +135,6 @@ function deserialize(inputCas, inputStream)
             anno_comment_3:setKey("unknown")
             anno_comment_3:setValue(tax["unknown"]) --LIVB
             anno_comment_3:addToIndexes()
-            --print("ANNOTATIONCOMMENT")
-            print(anno_comment)
-            print(anno_comment_1)
-            print(anno_comment_2)
-            print(anno_comment_3)
         end
 
     end

@@ -30,7 +30,7 @@ class TelemetryTest(unittest.IsolatedAsyncioTestCase):
         sink = MemorySink()
         logger = configure_logger(sinks=[sink], start_background_worker=False)
 
-        await logger.info("hello", extra={"answer": 42})
+        await logger.info("hello", answer=42)
 
         self.assertEqual(len(sink.events), 1)
         event = sink.events[0]
@@ -46,7 +46,9 @@ class TelemetryTest(unittest.IsolatedAsyncioTestCase):
         sink = MemorySink()
         logger = configure_logger(sinks=[sink], start_background_worker=False)
 
-        await logger.metric("request", "duui.request.count", 3, "count", tags={"duui.scope": "global"})
+        await logger.metric(
+            "request", "duui.request.count", 3, "count", tags={"duui.scope": "global"}
+        )
 
         event = sink.events[0]
         self.assertEqual(event.type, "metric")
@@ -71,7 +73,9 @@ class TelemetryTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(config.sample_interval_ms, 500)
 
     def test_traceparent_parsing(self):
-        trace_id, span_id = parse_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+        trace_id, span_id = parse_traceparent(
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        )
         self.assertEqual(trace_id, "4bf92f3577b34da6a3ce929d0e0e4736")
         self.assertEqual(span_id, "00f067aa0ba902b7")
 
@@ -80,12 +84,16 @@ class TelemetryTest(unittest.IsolatedAsyncioTestCase):
             orchestrator_id="orch",
             component_id="component",
             replica_id="replica",
-            telemetry=TelemetryRequestConfig(scopes=("global", "orchestrator", "component_replica")),
+            telemetry=TelemetryRequestConfig(
+                scopes=("global", "orchestrator", "component_replica")
+            ),
         )
 
         scopes = ScopeRegistry.scopes(context)
         self.assertIn({"duui.scope": "global"}, scopes)
-        self.assertIn({"duui.scope": "orchestrator", "duui.orchestrator_id": "orch"}, scopes)
+        self.assertIn(
+            {"duui.scope": "orchestrator", "duui.orchestrator_id": "orch"}, scopes
+        )
         self.assertIn(
             {
                 "duui.scope": "component_replica",
@@ -110,8 +118,14 @@ class TelemetryTest(unittest.IsolatedAsyncioTestCase):
     async def test_stream_handshake_is_session_scoped(self):
         stream = StreamConnection(
             stream_id="s1",
-            identifiers={"orchestrator_id": "orch", "component_id": "component", "artifact_id": None},
-            expires_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            identifiers={
+                "orchestrator_id": "orch",
+                "component_id": "component",
+                "artifact_id": None,
+            },
+            expires_at=__import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            )
             + __import__("datetime").timedelta(seconds=30),
             max_queue_size=10,
         )

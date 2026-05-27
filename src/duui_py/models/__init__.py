@@ -13,6 +13,8 @@ from duui_py.models.config import (
     LimitSettings,
     ResolvedDomainSpec,
     ValidationSettings,
+    WireSettings,
+    WireWindowSettings,
     load_annotator_config,
 )
 from duui_py.models.duui import (
@@ -37,6 +39,7 @@ from duui_py.models.uima import (
     sofa_kind,
     sofa_text_value,
     sofa_to_wire_data,
+    uima_type_name,
 )
 from duui_py.models.uima_typesystem.texttechnologylab.annotation.types import (
     AnnotatorMetaData,
@@ -72,6 +75,8 @@ __all__ = [
     "UimaValue",
     "V1RequestEnvelope",
     "ValidationSettings",
+    "WireSettings",
+    "WireWindowSettings",
     "sofa_annotation_type",
     "sofa_bytes_value",
     "sofa_default_for_mime",
@@ -79,5 +84,6 @@ __all__ = [
     "sofa_kind",
     "sofa_text_value",
     "sofa_to_wire_data",
+    "uima_type_name",
     "load_annotator_config",
 ]

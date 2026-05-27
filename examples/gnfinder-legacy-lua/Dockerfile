@@ -1,11 +1,10 @@
-FROM golang:1.23 AS gnfinder-builder
-RUN go install github.com/gnames/gnfinder@latest
+FROM docker.io/gnames/gnfinder:latest AS gnfinder-backend
 
 FROM python:3.11-slim
 
 WORKDIR /app
 COPY . /app
-COPY --from=gnfinder-builder /go/bin/gnfinder /usr/local/bin/gnfinder
+COPY --from=gnfinder-backend /bin/gnfinder /usr/local/bin/gnfinder
 
 RUN pip install --no-cache-dir -e /app \
     && pip install --no-cache-dir -r /app/examples/gnfinder-legacy-lua/requirements.txt

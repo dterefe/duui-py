@@ -2,7 +2,10 @@
 
 The examples are the contract for the currently documented framework surface.
 
-All current Python examples define config in code, use generated `MsgPackLuaCodec`, pass `AsyncChunkedRequestAdapter` to `create_app`, log normal lifecycle messages, emit metrics, and yield existing UIMA model objects. They do not use custom Lua scripts.
+Current Python examples define config in code, expose either generated
+`MsgPackLuaCodec` or explicitly migrated legacy custom Lua, use the new
+`duui_py.telemetry.telemetry` facade for lifecycle logs and metrics, and yield
+existing UIMA model objects.
 
 ## GNFinder
 
