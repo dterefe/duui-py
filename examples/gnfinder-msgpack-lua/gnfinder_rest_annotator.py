@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import atexit
 import json
-import os
 import subprocess
 import threading
 from collections.abc import AsyncIterator
@@ -41,10 +40,7 @@ _BACKEND_PROCESS: subprocess.Popen[bytes] | None = None
 
 
 def _backend_url(parameters: dict[str, object]) -> str:
-    value = (
-        os.environ.get("GNFINDER_API_URL")
-        or parameters.get("backend_url")
-    )
+    value = parameters.get("backend_url")
     if value is None or not str(value).strip():
         value = _ensure_local_backend()
     value = str(value).strip().rstrip("/")
@@ -55,7 +51,7 @@ def _backend_url(parameters: dict[str, object]) -> str:
 
 def _ensure_local_backend() -> str:
     global _BACKEND_PROCESS
-    port = int(os.environ.get("GNFINDER_API_PORT", DEFAULT_GNFINDER_API_PORT))
+    port = DEFAULT_GNFINDER_API_PORT
     url = f"http://127.0.0.1:{port}"
     if _backend_ready(url):
         return url
@@ -67,7 +63,6 @@ def _ensure_local_backend() -> str:
             if binary is None:
                 unavailable(
                     "No bundled GNFinder binary found.",
-                    env="GNFINDER_BINARY",
                     path="duui-uima/duui-GNFinder/gnfinder",
                 )
             _BACKEND_PROCESS = subprocess.Popen(

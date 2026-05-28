@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from collections.abc import AsyncIterator
 from pathlib import Path
 import sys
@@ -19,9 +18,7 @@ from duui_py.logging import (
     configure_stream_manager,
     create_event_context_from_request,
     set_event_context,
-    ConsoleSink,
     EventSink,
-    OTLPSink,
     StreamSink,
 )
 from duui_py.models import AnnotatorConfig
@@ -145,11 +142,6 @@ def create_app(
             max_queue_size=logging_settings.max_queue_size,
         )
         sinks: list[EventSink] = [cast(EventSink, StreamSink(stream_manager))]
-        if os.environ.get("DUUI_DEBUG_LOGGING"):
-            sinks.append(cast(EventSink, ConsoleSink()))
-        otlp_endpoint = os.environ.get("DUUI_OTLP_ENDPOINT")
-        if otlp_endpoint:
-            sinks.append(cast(EventSink, OTLPSink(otlp_endpoint)))
 
         logger = configure_logger(
             sinks=sinks,

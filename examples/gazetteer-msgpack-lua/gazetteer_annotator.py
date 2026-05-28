@@ -44,7 +44,7 @@ _HTTP_LOCAL = threading.local()
 
 
 def _configured_backend_url(parameters: dict[str, object]) -> str | None:
-    value = parameters.get("backend_url") or os.environ.get("GAZETTEER_RS_URL")
+    value = parameters.get("backend_url")
     if value is None or not str(value).strip():
         return None
     return _normalize_backend_url(str(value).strip())
@@ -68,7 +68,7 @@ def _normalize_backend_url(value: str) -> str:
 
 def _ensure_local_backend() -> str:
     global _BACKEND_PROCESS, _BACKEND_URL_CACHE
-    port = int(os.environ.get("GAZETTEER_RS_PORT", DEFAULT_GAZETTEER_RS_PORT))
+    port = DEFAULT_GAZETTEER_RS_PORT
     base_url = f"http://127.0.0.1:{port}"
     url = _normalize_backend_url(base_url)
     if _BACKEND_URL_CACHE is not None:
@@ -95,13 +95,13 @@ def _ensure_local_backend() -> str:
                 "--port",
                 str(port),
                 "--workers",
-                str(os.environ.get("GAZETTEER_RS_WORKERS", "1")),
+                "1",
                 "--limit",
-                str(os.environ.get("GAZETTEER_RS_LIMIT", "536870912")),
+                "536870912",
             ]
             _BACKEND_PROCESS = subprocess.Popen(command, cwd=cwd)
             atexit.register(_stop_local_backend)
-        startup_timeout = float(os.environ.get("GAZETTEER_RS_STARTUP_TIMEOUT", "120"))
+        startup_timeout = 120.0
         deadline = time() + startup_timeout
         while time() < deadline:
             if _backend_ready(url):
@@ -122,9 +122,8 @@ def _stop_local_backend() -> None:
 
 
 def _gazetteer_binary(required: bool = True) -> str:
-    configured = os.environ.get("GAZETTEER_RS_BINARY")
     local = Path(__file__).resolve().parent / "backend" / "gazetteer"
-    candidates = [configured, str(local), "/app/gazetteer", shutil.which("gazetteer")]
+    candidates = [str(local), "/app/gazetteer", shutil.which("gazetteer")]
     for candidate in candidates:
         if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
@@ -137,9 +136,8 @@ def _gazetteer_binary(required: bool = True) -> str:
 
 
 def _gazetteer_config(required: bool = True) -> Path:
-    configured = os.environ.get("GAZETTEER_RS_CONFIG")
     local = Path(__file__).resolve().parent / "backend" / "config.toml"
-    candidates = [configured, str(local), "/app/config.toml", "config.toml"]
+    candidates = [str(local), "/app/config.toml", "config.toml"]
     for candidate in candidates:
         if candidate and Path(candidate).is_file():
             return Path(candidate).resolve()
@@ -148,7 +146,7 @@ def _gazetteer_config(required: bool = True) -> Path:
             "No bundled gazetteer-rs config found.",
             candidates=[candidate for candidate in candidates if candidate],
         )
-    return Path(configured or "/app/config.toml")
+    return Path("/app/config.toml")
 
 
 def _backend_ready(url: str) -> bool:

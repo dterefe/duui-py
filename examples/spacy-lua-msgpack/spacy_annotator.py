@@ -4,7 +4,6 @@ from functools import lru_cache
 from time import time
 from typing import Any
 import json
-import os
 from duui_py.annotator import DuuiAnnotator
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
@@ -97,6 +96,7 @@ MORPH_KEYS = {
     "Animacy": "animacy",
     "Polarity": "negative",
     "NumType": "numType",
+    "Poss": "possessive",
     "PronType": "pronType",
     "Reflex": "reflex",
     "VerbType": "transitivity",
@@ -156,9 +156,7 @@ def _language(doc: V1RequestEnvelope) -> str:
         if value:
             return str(value)
     sofa = getattr(doc, "sofa", None)
-    return getattr(sofa, "language", None) or getattr(doc, "language", None) or os.environ.get(
-        "SPACY_MODEL_LANG", "de"
-    )
+    return getattr(sofa, "language", None) or getattr(doc, "language", None) or "de"
 
 
 def _model_name(doc: V1RequestEnvelope) -> str:
@@ -166,11 +164,6 @@ def _model_name(doc: V1RequestEnvelope) -> str:
         value = doc.parameters.get(key)
         if value:
             return str(value)
-    env_model = os.environ.get("SPACY_MODEL_NAME") or os.environ.get(
-        "TEXTIMAGER_SPACY_SINGLE_MODEL"
-    )
-    if env_model:
-        return env_model
     language = _language(doc)
     variant = str(
         doc.parameters.get("model_variant")
@@ -196,9 +189,7 @@ def _model_name(doc: V1RequestEnvelope) -> str:
 
 
 def _outputs(parameters: dict[str, object]) -> set[str]:
-    variant = str(
-        parameters.get("variant") or os.environ.get("TEXTIMAGER_SPACY_VARIANT") or ""
-    )
+    variant = str(parameters.get("variant") or "")
     outputs = set(VARIANT_OUTPUTS.get(variant, VARIANT_OUTPUTS[""]))
     outputs.difference_update(_parse_exclude(parameters.get("exclude")))
     return outputs
@@ -355,7 +346,7 @@ def _build_window_annotations(
             next_ref += 1
             token_annotation = Token(begin=begin, end=end, ref=token_ref)
             token_features = token_annotation.features
-            token_key = token.i
+            token_key = order
             token_refs[token_key] = {"$ref": token_ref}
             token_features_by_i[token_key] = token_features
             annotations.append(token_annotation)
@@ -392,7 +383,7 @@ def _build_window_annotations(
                 if token.is_space:
                     continue
                 begin, end = token_span(token)
-                dep_type = token.dep_.upper()
+                dep_type = token.dep_
                 output_type = DEPENDENCY_TYPE
                 if dep_type == "ROOT":
                     output_type = ROOT_TYPE

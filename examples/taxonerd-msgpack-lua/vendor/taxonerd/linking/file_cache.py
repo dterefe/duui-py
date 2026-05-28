@@ -14,7 +14,7 @@ from hashlib import sha256
 import requests
 import logging
 
-CACHE_ROOT = Path(os.getenv("TAXONERD_CACHE", str(Path.home() / ".taxonerd")))
+CACHE_ROOT = Path.home() / ".taxonerd"
 DATASET_CACHE = str(CACHE_ROOT / "datasets")
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,7 @@ def filename_to_url(filename: str, cache_dir: str = None) -> Tuple[str, str]:
 
 
 def http_get(url: str, temp_file: IO) -> None:
-    timeout = float(os.getenv("TAXONERD_CACHE_HTTP_TIMEOUT", "30"))
+    timeout = 30.0
     req = requests.get(url, stream=True, timeout=timeout)
     for chunk in req.iter_content(chunk_size=1024):
         if chunk:  # filter out keep-alive new chunks
@@ -155,7 +155,7 @@ def get_from_cache(url: str, name: str, cache_dir: str = None) -> str:
     if cached_path is not None:
         return cached_path
 
-    timeout = float(os.getenv("TAXONERD_CACHE_HTTP_TIMEOUT", "30"))
+    timeout = 30.0
     response = requests.head(url, allow_redirects=True, timeout=timeout)
     if response.status_code != 200:
         raise IOError(

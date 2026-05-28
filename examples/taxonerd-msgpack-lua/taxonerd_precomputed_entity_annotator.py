@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from functools import lru_cache
@@ -70,7 +69,7 @@ def _linker_name(value: object | None) -> str | None:
     configured = str(
         value
         if value is not None
-        else os.environ.get("TAXONERD_LINKING", "gbif_backbone")
+        else "gbif_backbone"
     )
     if configured not in TAXONERD_LINKERS:
         unprocessable(

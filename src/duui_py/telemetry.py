@@ -82,7 +82,7 @@ def host_resource_attributes() -> dict[str, str]:
     if _HOST_RESOURCE_ATTRIBUTES is None:
         host_name = socket.gethostname()
         attrs = {
-            "service.name": os.environ.get("DUUI_SERVICE_NAME", "duui-py-annotator"),
+            "service.name": "duui-py-annotator",
             "host.name": host_name,
             "process.pid": str(os.getpid()),
             "telemetry.sdk.name": "duui-py",
@@ -137,7 +137,7 @@ def parse_traceparent(value: str | None) -> tuple[str | None, str | None]:
 class TelemetryRequestConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    resource: tuple[str, ...] = Field(default_factory=tuple)
+    resource: tuple[str, ...] = ("cpu", "memory", "network")
     stats: tuple[str, ...] = ("duration", "throughput", "histogram")
     scopes: tuple[str, ...] = DEFAULT_SCOPES
     sample_interval_ms: int = Field(default=1000, ge=100, le=60000)

@@ -12,6 +12,5 @@ RUN pip install --no-cache-dir -e /app \
     && pip install --no-cache-dir -r /app/examples/geonames-legacy-lua/requirements.txt
 
 WORKDIR /app/examples/geonames-legacy-lua
-ENV PYTHONPATH=/app/src
 EXPOSE 9714
 CMD ["./start.sh"]

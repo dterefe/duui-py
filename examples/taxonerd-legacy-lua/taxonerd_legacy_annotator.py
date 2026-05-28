@@ -2,7 +2,6 @@ from __future__ import annotations
 from functools import lru_cache
 from time import time
 from typing import Any
-import os
 import json
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -57,21 +56,26 @@ class TextImagerRequest(BaseModel):
         ]
     )
     model: str = "en_ner_eco_md"
+    prefer_gpu: bool = False
 
 
 def _model_name(value: str | None) -> str:
-    value = value or os.environ.get("TEXTIMAGER_TAXONERD_MODEL_NAME") or "en_ner_eco_md"
+    value = value or "en_ner_eco_md"
     return TAXONERD_MODELS.get(value, value)
 
 
 def _linker_name(value: str | None) -> str | None:
-    value = value or os.environ.get("TEXTIMAGER_TAXONERD_LINKER_NAME") or "gbif_backbone"
+    value = value or "gbif_backbone"
     return TAXONERD_LINKERS.get(value, value)
 
 
 @lru_cache(maxsize=3)
 def _load_taxonerd(
-    model: str, linker: str | None, threshold: float, exclude: tuple[str, ...]
+    model: str,
+    linker: str | None,
+    threshold: float,
+    exclude: tuple[str, ...],
+    prefer_gpu: bool,
 ):
     try:
         from taxonerd import TaxoNERD
@@ -80,7 +84,7 @@ def _load_taxonerd(
             "TaxoNERD is not installed in this runtime.", exception=type(exc).__name__
         )
     try:
-        taxonerd = TaxoNERD(prefer_gpu=False)
+        taxonerd = TaxoNERD(prefer_gpu=prefer_gpu)
         taxonerd.load(
             model=model,
             exclude=list(exclude),
@@ -177,6 +181,11 @@ class TaxoNERDLegacyAnnotator(DuuiAnnotator[TextImagerRequest, dict[str, object]
                 "default": 0.7,
                 "description": "Legacy TaxoNERD linking threshold.",
             },
+            "prefer_gpu": {
+                "type": "boolean",
+                "default": False,
+                "description": "Passed to TaxoNERD.",
+            },
             "exclude": {
                 "type": "array",
                 "description": "Legacy TaxoNERD pipeline components to exclude.",
@@ -205,19 +214,19 @@ class TaxoNERDLegacyAnnotator(DuuiAnnotator[TextImagerRequest, dict[str, object]
         linker = _linker_name(doc.linking)
         threshold = float(doc.threshold)
         exclude = tuple(doc.exclude)
-        name = os.environ.get(
-            "TEXTIMAGER_TAXONERD_ANNOTATOR_NAME", "textimager-duui-taxonerd"
-        )
-        version = os.environ.get("TEXTIMAGER_TAXONERD_ANNOTATOR_VERSION", "1.3.3")
-        model_version = os.environ.get("TEXTIMAGER_TAXONERD_MODEL_VERSION", "1.0.0")
+        prefer_gpu = bool(doc.prefer_gpu)
+        name = "textimager-duui-taxonerd"
+        version = "1.3.3"
+        model_version = "1.0.0"
         await telemetry.trace(
             "TaxoNERD legacy processing started",
             model=model,
             linker=linker,
             threshold=threshold,
             exclude=list(exclude),
+            prefer_gpu=prefer_gpu,
         )
-        taxo = _load_taxonerd(model, linker, threshold, exclude)
+        taxo = _load_taxonerd(model, linker, threshold, exclude, prefer_gpu)
         try:
             rows = taxo.find_in_text(doc.text).values.tolist()
         except Exception as exc:

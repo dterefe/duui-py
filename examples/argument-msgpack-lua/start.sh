@@ -10,5 +10,4 @@ if [ ! -x "$VENV_PYTHON" ]; then
   exit 1
 fi
 
-export PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH:-}"
 exec "$VENV_PYTHON" -m uvicorn argument_annotator:app --host 0.0.0.0 --port 9714

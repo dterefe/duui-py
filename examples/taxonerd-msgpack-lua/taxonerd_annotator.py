@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
@@ -133,7 +132,7 @@ LINK_VALUE_FEATURE = "_taxonerd_link_value"
 LINK_SCORE_FEATURE = "_taxonerd_link_score"
 NER_LABEL_FEATURE = "_taxonerd_ner_label"
 DEFAULT_SPARQL_ENDPOINT = "http://host.containers.internal:8098/biofid-search/sparql"
-LINK_CACHE_MAX = int(os.environ.get("TAXONERD_LINK_CACHE_MAX", "20000"))
+LINK_CACHE_MAX = 20000
 _LINK_CACHE: OrderedDict[tuple[object, ...], list[dict[str, object]]] = OrderedDict()
 _LINK_CACHE_LOCK = Lock()
 _CANDIDATE_GENERATOR_LOCK = Lock()
@@ -167,7 +166,7 @@ class StrategyResult:
 
 
 def _model_name(value: object | None) -> str:
-    configured = str(value or os.environ.get("TAXONERD_MODEL") or "en_ner_eco_md")
+    configured = str(value or "en_ner_eco_md")
     return TAXONERD_MODELS.get(configured, configured)
 
 
@@ -175,7 +174,7 @@ def _linker_name(value: object | None) -> str | None:
     configured = str(
         value
         if value is not None
-        else os.environ.get("TAXONERD_LINKING", "gbif_backbone")
+        else "gbif_backbone"
     )
     if configured not in TAXONERD_LINKERS:
         unprocessable(
@@ -1632,8 +1631,7 @@ class TaxoNERDAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         neighbours = _int(parameters.get("neighbours"), 10, minimum=1)
         ann_ef_search = _int(parameters.get("ann_ef_search"), 80, minimum=10)
         sparql_endpoint = _string(
-            parameters.get("sparql_endpoint")
-            or os.environ.get("TAXONERD_SPARQL_ENDPOINT"),
+            parameters.get("sparql_endpoint"),
             DEFAULT_SPARQL_ENDPOINT,
         )
         sparql_batch_size = _int(parameters.get("sparql_batch_size"), 64, minimum=1)
@@ -1788,23 +1786,18 @@ app = create_app(TaxoNERDAnnotator, request_adapter=AsyncChunkedRequestAdapter()
 
 
 def _preload_runtime() -> None:
-    model = _model_name(os.environ.get("TAXONERD_MODEL"))
-    linker_values = _csv(
-        os.environ.get("TAXONERD_PRELOAD_LINKERS")
-        or os.environ.get("TAXONERD_LINKING")
-        or "gbif_backbone",
-        ("gbif_backbone",),
-    )
+    model = _model_name(None)
+    linker_values = _csv("gbif_backbone", ("gbif_backbone",))
     linkers = tuple(
         linker
         for value in linker_values
         for linker in [_linker_name(value)]
         if linker is not None
     )
-    exclude = _exclude(os.environ.get("TAXONERD_EXCLUDE"))
-    prefer_gpu = _bool(os.environ.get("TAXONERD_PREFER_GPU"), False)
-    ann_ef_search = _int(os.environ.get("TAXONERD_ANN_EF_SEARCH"), 80)
-    threshold = _float(os.environ.get("TAXONERD_THRESHOLD"), 0.7)
+    exclude = _exclude(None)
+    prefer_gpu = False
+    ann_ef_search = 80
+    threshold = 0.7
     _load_taxonerd_legacy_components(model, exclude, prefer_gpu)
     for linker in linkers:
         _load_taxonerd(model, linker, threshold, exclude, prefer_gpu)
@@ -1814,8 +1807,6 @@ def _preload_runtime() -> None:
 
 @app.on_event("startup")
 async def preload_runtime_on_startup() -> None:
-    if not _bool(os.environ.get("TAXONERD_PRELOAD"), True):
-        return
     started = time()
     try:
         await asyncio.to_thread(_preload_runtime)
@@ -1825,9 +1816,7 @@ async def preload_runtime_on_startup() -> None:
             exception=type(exc).__name__,
             detail=str(exc),
         )
-        if _bool(os.environ.get("TAXONERD_PRELOAD_REQUIRED"), False):
-            raise
-        return
+        raise
     await telemetry.info(
         "TaxoNERD runtime preloaded",
         elapsed_ms=int((time() - started) * 1000),

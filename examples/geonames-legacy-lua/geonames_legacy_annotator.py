@@ -40,11 +40,7 @@ _BACKEND_URL_CACHE: str | None = None
 
 
 def _backend_url(doc: GeoNamesRequest) -> str:
-    value = (
-        doc.parameters.get("backend_url")
-        or os.environ.get("GEONAMES_FST_URL")
-        or os.environ.get("GAZETTEER_RS_URL")
-    )
+    value = doc.parameters.get("backend_url")
     if value is None or not str(value).strip():
         return _ensure_local_backend()
     return _normalize_backend_url(str(value).strip())
@@ -59,7 +55,7 @@ def _normalize_backend_url(value: str) -> str:
 
 def _ensure_local_backend() -> str:
     global _BACKEND_PROCESS, _BACKEND_URL_CACHE
-    port = int(os.environ.get("GEONAMES_FST_PORT", DEFAULT_GEONAMES_FST_PORT))
+    port = DEFAULT_GEONAMES_FST_PORT
     url = _normalize_backend_url(f"http://127.0.0.1:{port}")
     if _BACKEND_URL_CACHE is not None:
         return _BACKEND_URL_CACHE
@@ -85,9 +81,9 @@ def _ensure_local_backend() -> str:
                     "--port",
                     str(port),
                     "--workers",
-                    str(os.environ.get("GEONAMES_FST_WORKERS", "1")),
+                    "1",
                     "--limit",
-                    str(os.environ.get("GEONAMES_FST_LIMIT", "536870912")),
+                    "536870912",
                 ],
                 cwd=str(config.parent),
             )
@@ -111,7 +107,6 @@ def _stop_local_backend() -> None:
 def _gazetteer_binary() -> str:
     local = Path(__file__).resolve().parent / "backend" / "gazetteer"
     candidates = [
-        os.environ.get("GAZETTEER_RS_BINARY"),
         str(local),
         "/app/gazetteer",
         shutil.which("gazetteer"),
@@ -127,7 +122,6 @@ def _gazetteer_binary() -> str:
 def _gazetteer_config() -> Path:
     local = Path(__file__).resolve().parent / "backend" / "config.toml"
     candidates = [
-        os.environ.get("GAZETTEER_RS_CONFIG"),
         str(local),
         "/app/config.toml",
         "config.toml",

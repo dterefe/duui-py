@@ -21,14 +21,6 @@ public final class DUUIPodmanClient extends DUUIDockerClient {
     }
 
     private static String defaultPodmanHost() {
-        String explicit = System.getenv("DOCKER_HOST");
-        if (explicit != null && !explicit.isBlank()) {
-            return explicit;
-        }
-        String runtimeDir = System.getenv("XDG_RUNTIME_DIR");
-        if (runtimeDir != null && !runtimeDir.isBlank()) {
-            return "unix://" + runtimeDir + "/podman/podman.sock";
-        }
         return "unix:///run/podman/podman.sock";
     }
 

@@ -53,10 +53,7 @@ _HTTP_LOCAL = threading.local()
 
 
 def _configured_backend_url(parameters: dict[str, object]) -> str | None:
-    value = (
-        parameters.get("backend_url")
-        or os.environ.get("GEONAMES_FST_URL")
-    )
+    value = parameters.get("backend_url")
     if value is None or not str(value).strip():
         return None
     return str(value).strip().rstrip("/")
@@ -73,7 +70,7 @@ async def _resolve_backend_url(parameters: dict[str, object]) -> str:
 
 def _ensure_local_backend() -> str:
     global _BACKEND_PROCESS, _BACKEND_URL_CACHE
-    port = int(os.environ.get("GEONAMES_FST_PORT", DEFAULT_GEONAMES_FST_PORT))
+    port = DEFAULT_GEONAMES_FST_PORT
     url = f"http://127.0.0.1:{port}"
     if _BACKEND_URL_CACHE is not None:
         return _BACKEND_URL_CACHE
@@ -101,7 +98,7 @@ def _ensure_local_backend() -> str:
                 "--timestamp",
                 str(data_root / "geonames_timestamp.txt"),
                 "--workers",
-                str(os.environ.get("GEONAMES_FST_WORKERS", "1")),
+                "1",
             ]
             _BACKEND_PROCESS = subprocess.Popen(command, cwd=str(data_root.parent))
             atexit.register(_stop_local_backend)
@@ -125,9 +122,8 @@ def _stop_local_backend() -> None:
 
 
 def _geonames_fst_binary(required: bool = True) -> str:
-    configured = os.environ.get("GEONAMES_FST_BINARY")
     local = Path(__file__).resolve().parent / "backend" / "geonames-fst"
-    candidates = [configured, str(local), "/app/geonames-fst"]
+    candidates = [str(local), "/app/geonames-fst"]
     for candidate in candidates:
         if candidate and Path(candidate).is_file() and os.access(candidate, os.X_OK):
             return str(candidate)
@@ -140,9 +136,8 @@ def _geonames_fst_binary(required: bool = True) -> str:
 
 
 def _geonames_data_root(required: bool = True) -> Path:
-    configured = os.environ.get("GEONAMES_FST_DATA")
     local = Path(__file__).resolve().parent / "backend" / "data"
-    candidates = [configured, str(local), "/app/data"]
+    candidates = [str(local), "/app/data"]
     for candidate in candidates:
         if candidate and (Path(candidate) / "geonames").is_dir():
             return Path(candidate).resolve()
@@ -151,7 +146,7 @@ def _geonames_data_root(required: bool = True) -> Path:
             "No bundled geonames-fst data directory found.",
             candidates=[candidate for candidate in candidates if candidate],
         )
-    return Path(configured or "/app/data")
+    return Path("/app/data")
 
 
 def _backend_ready(url: str) -> bool:

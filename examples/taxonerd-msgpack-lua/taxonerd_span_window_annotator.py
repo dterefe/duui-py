@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import queue
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
@@ -114,7 +113,7 @@ def _parameter(
 
 
 def _model_name(value: object | None) -> str:
-    configured = str(value or os.environ.get("TAXONERD_MODEL") or "en_ner_eco_md")
+    configured = str(value or "en_ner_eco_md")
     model = TAXONERD_MODELS.get(configured)
     if model is None:
         unprocessable(
@@ -129,7 +128,7 @@ def _linker_name(value: object | None) -> str | None:
     configured = str(
         value
         if value is not None
-        else os.environ.get("TAXONERD_LINKING", "gbif_backbone")
+        else "gbif_backbone"
     )
     if configured not in TAXONERD_LINKERS:
         unprocessable(

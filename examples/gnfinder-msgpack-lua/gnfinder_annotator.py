@@ -1,7 +1,6 @@
 from __future__ import annotations
 import asyncio
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -42,14 +41,13 @@ LEGACY_GNFINDER_BINARY = (
 
 def _resolve_binary(parameter_value: object | None = None) -> str | None:
     configured = str(parameter_value) if parameter_value else None
-    return _resolve_binary_cached(configured, os.getenv("GNFINDER_BINARY"))
+    return _resolve_binary_cached(configured)
 
 
 @lru_cache(maxsize=32)
-def _resolve_binary_cached(parameter_value: str | None, env_binary: str | None) -> str | None:
+def _resolve_binary_cached(parameter_value: str | None) -> str | None:
     candidates = [
         parameter_value,
-        env_binary,
         shutil.which("gnfinder"),
         DEFAULT_GNFINDER_BINARY,
         LEGACY_GNFINDER_BINARY,
@@ -337,7 +335,6 @@ class GNFinderAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 "GNFinder binary is not available",
                 configured_binary=str(
                     doc.parameters.get("gnfinder_binary")
-                    or os.getenv("GNFINDER_BINARY")
                     or DEFAULT_GNFINDER_BINARY
                 ),
             )

@@ -1,0 +1,17 @@
+docker.io/library/duui-py-taxonerd-legacy:local ce95f87edb00 3 days ago
+docker.io/library/duui-py-taxonerd-msgpack:local cba326b85bcc 2 hours ago
+localhost/duui-py-gazetteer-legacy-lua:dev 8c2227e5c583 28 hours ago
+localhost/duui-py-gazetteer-legacy-lua:latest 696c1f9e1b92 3 minutes ago
+localhost/duui-py-gazetteer-msgpack-lua:dev b8312f9ee078 28 hours ago
+localhost/duui-py-gazetteer-msgpack-lua:latest 4436881f5648 3 minutes ago
+localhost/duui-py-gnfinder-legacy-lua:dev 8b0995c25f35 16 hours ago
+localhost/duui-py-gnfinder-legacy-lua:latest cec87f0fa882 3 minutes ago
+localhost/duui-py-gnfinder-msgpack-lua:dev 9655902d1ded 3 hours ago
+localhost/duui-py-gnfinder-msgpack-lua:latest 398a9b145333 2 minutes ago
+localhost/duui-py-gnfinder:latest 6bbf6539d088 56 minutes ago
+localhost/duui-py-spacy-legacy-lua:latest 212fb9451d86 5 minutes ago
+localhost/duui-py-spacy-lua-msgpack:dev a53f5ba72b5a 4 days ago
+localhost/duui-py-spacy-lua-msgpack:latest 6ba0aeec71dc 3 minutes ago
+localhost/duui-py-spacy-lua-msgpack:spacy372 309c573c70e3 13 hours ago
+localhost/duui-py-taxonerd-legacy-lua:latest 425a4b3eacd1 About a minute ago
+localhost/duui-py-taxonerd-msgpack-lua:latest 648d5ef0744e 2 seconds ago

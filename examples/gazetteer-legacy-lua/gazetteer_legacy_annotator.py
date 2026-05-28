@@ -41,7 +41,7 @@ _BACKEND_URL_CACHE: str | None = None
 
 
 def _backend_url(doc: GazetteerRequest) -> str:
-    value = doc.parameters.get("backend_url") or os.environ.get("GAZETTEER_RS_URL")
+    value = doc.parameters.get("backend_url")
     if value is None or not str(value).strip():
         return _ensure_local_backend()
     return _normalize_backend_url(str(value).strip())
@@ -56,7 +56,7 @@ def _normalize_backend_url(value: str) -> str:
 
 def _ensure_local_backend() -> str:
     global _BACKEND_PROCESS, _BACKEND_URL_CACHE
-    port = int(os.environ.get("GAZETTEER_RS_PORT", DEFAULT_GAZETTEER_RS_PORT))
+    port = DEFAULT_GAZETTEER_RS_PORT
     base_url = f"http://127.0.0.1:{port}"
     url = _normalize_backend_url(base_url)
     if _BACKEND_URL_CACHE is not None:
@@ -83,14 +83,14 @@ def _ensure_local_backend() -> str:
                     "--port",
                     str(port),
                     "--workers",
-                    str(os.environ.get("GAZETTEER_RS_WORKERS", "1")),
+                    "1",
                     "--limit",
-                    str(os.environ.get("GAZETTEER_RS_LIMIT", "536870912")),
+                    "536870912",
                 ],
                 cwd=str(config.parent),
             )
             atexit.register(_stop_local_backend)
-        startup_timeout = float(os.environ.get("GAZETTEER_RS_STARTUP_TIMEOUT", "120"))
+        startup_timeout = 120.0
         deadline = time() + startup_timeout
         while time() < deadline:
             if _backend_ready(url):
@@ -108,7 +108,6 @@ def _stop_local_backend() -> None:
 def _gazetteer_binary() -> str:
     local = Path(__file__).resolve().parent / "backend" / "gazetteer"
     candidates = [
-        os.environ.get("GAZETTEER_RS_BINARY"),
         str(local),
         "/app/gazetteer",
         shutil.which("gazetteer"),
@@ -124,7 +123,6 @@ def _gazetteer_binary() -> str:
 def _gazetteer_config() -> Path:
     local = Path(__file__).resolve().parent / "backend" / "config.toml"
     candidates = [
-        os.environ.get("GAZETTEER_RS_CONFIG"),
         str(local),
         "/app/config.toml",
         "config.toml",

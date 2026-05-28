@@ -232,34 +232,11 @@ class FusekiGbifKnowledgeBase:
         concurrency: int | None = None,
         timeout: float | None = None,
     ) -> None:
-        self.endpoint = (
-            endpoint
-            or os.environ.get("TAXONERD_FUSEKI_ENDPOINT")
-            or os.environ.get("TAXONERD_SPARQL_ENDPOINT")
-            or DEFAULT_FUSEKI_ENDPOINT
-        )
-        self.batch_size = int(
-            batch_size
-            or os.environ.get("TAXONERD_FUSEKI_BATCH_SIZE")
-            or os.environ.get("TAXONERD_SPARQL_BATCH_SIZE")
-            or 128
-        )
-        self.concurrency = int(
-            concurrency
-            or os.environ.get("TAXONERD_FUSEKI_CONCURRENCY")
-            or os.environ.get("TAXONERD_SPARQL_CONCURRENCY")
-            or 8
-        )
-        self.timeout = float(
-            timeout
-            or os.environ.get("TAXONERD_FUSEKI_TIMEOUT")
-            or os.environ.get("TAXONERD_SPARQL_TIMEOUT")
-            or 20.0
-        )
-        self.local_fallback = self._env_bool(
-            os.environ.get("TAXONERD_FUSEKI_LOCAL_FALLBACK"),
-            True,
-        )
+        self.endpoint = endpoint or DEFAULT_FUSEKI_ENDPOINT
+        self.batch_size = int(batch_size or 128)
+        self.concurrency = int(concurrency or 8)
+        self.timeout = float(timeout or 20.0)
+        self.local_fallback = True
 
     def get_cuis_from_alias(self, alias):
         return self.get_cuis_from_aliases([alias]).get(alias, [])

@@ -1,9 +1,0 @@
-variant,docs with same found count,docs with same linked count,docs with same unique found set,changed docs,extra unique mentions,missing unique mentions,display
-async-taxonerd-whole-document-gbif,43.0,43.0,42.0,3.0,1.0,3.0,Async whole document
-async-taxonerd-span-sentence-gbif,23.0,23.0,24.0,21.0,86.0,53.0,Async sentence spans
-async-taxonerd-span-sentence-nproc2-gbif,23.0,23.0,24.0,21.0,86.0,53.0,"Sentence spans, nproc=2"
-async-taxonerd-span-sentence-nproc4-gbif,23.0,23.0,24.0,21.0,86.0,53.0,"Sentence spans, nproc=4"
-async-taxonerd-span-sentence-merged-gbif,40.0,40.0,39.0,6.0,4.0,5.0,Sentence spans merged
-async-taxonerd-span-paragraph-gbif,31.0,31.0,26.0,19.0,38.0,36.0,Async paragraph spans
-async-taxonerd-span-paragraph-nproc2-gbif,31.0,31.0,26.0,19.0,38.0,36.0,"Paragraph spans, nproc=2"
-async-taxonerd-span-paragraph-nproc4-gbif,31.0,31.0,26.0,19.0,38.0,36.0,"Paragraph spans, nproc=4"

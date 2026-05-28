@@ -3,7 +3,6 @@ from functools import lru_cache
 from time import time
 from typing import Any
 import json
-import os
 from pathlib import Path
 from pydantic import BaseModel, Field
 from duui_py.annotator import DuuiAnnotator
@@ -89,10 +88,6 @@ class TextImagerRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
-def _env(name: str, default: str = "") -> str:
-    return os.environ.get(name, default)
-
-
 def _parse_exclude(value: object | None) -> set[str]:
     if value is None:
         return set()
@@ -117,14 +112,11 @@ def _model_name(doc: TextImagerRequest) -> str:
         value = params.get(key)
         if value:
             return str(value)
-    env_model = _env("TEXTIMAGER_SPACY_SINGLE_MODEL") or _env("SPACY_MODEL_NAME")
-    if env_model:
-        return env_model
     lang = str(
         params.get("spacy_language")
         or params.get("language")
         or doc.lang
-        or _env("TEXTIMAGER_SPACY_SINGLE_MODEL_LANG", "de")
+        or "de"
     )
     if lang == "x-unspecified":
         lang = "xx"
@@ -144,7 +136,7 @@ def _model_name(doc: TextImagerRequest) -> str:
 
 def _write_types(parameters: dict[str, Any]) -> set[str]:
     configured = parameters.get("write_types")
-    variant = str(parameters.get("variant") or _env("TEXTIMAGER_SPACY_VARIANT") or "")
+    variant = str(parameters.get("variant") or "")
     base = set(VARIANT_OUTPUTS.get(variant, VARIANT_OUTPUTS[""]))
     if isinstance(configured, str):
         try:
@@ -345,8 +337,8 @@ class SpacyLegacyAnnotator(DuuiAnnotator[TextImagerRequest, dict[str, object]]):
             entities=len(entities),
             elapsed_ms=elapsed_ms,
         )
-        name = _env("TEXTIMAGER_SPACY_ANNOTATOR_NAME", "textimager-duui-spacy")
-        version = _env("TEXTIMAGER_SPACY_ANNOTATOR_VERSION", "0.1.4")
+        name = "textimager-duui-spacy"
+        version = "0.1.4"
         try:
             import spacy
 

@@ -26,6 +26,5 @@ RUN pip install --no-cache-dir -e /app \
     && pip install --no-cache-dir https://github.com/nleguillarme/taxonerd/releases/download/v1.5.4/en_ner_eco_md_weak-1.1.0.tar.gz
 
 WORKDIR /app/examples/taxonerd-legacy-lua
-ENV PYTHONPATH=/app/src
 EXPOSE 9714
 CMD ["./start.sh"]

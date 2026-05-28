@@ -1,6 +1,5 @@
 from __future__ import annotations
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -26,13 +25,12 @@ DEFAULT_GNFINDER_BINARY = "gnfinder"
 
 
 def _resolve_binary() -> str | None:
-    return _resolve_binary_cached(os.getenv("GNFINDER_BINARY"))
+    return _resolve_binary_cached()
 
 
 @lru_cache(maxsize=8)
-def _resolve_binary_cached(env_binary: str | None) -> str | None:
+def _resolve_binary_cached() -> str | None:
     candidates = [
-        env_binary,
         shutil.which("gnfinder"),
         DEFAULT_GNFINDER_BINARY,
         "/home/stud_homes/s0424382/projects/ttlab/duui/TTLab-UIMA/GNFinder/gnfinder",
@@ -176,14 +174,12 @@ class GNFinderLegacyAnnotator(DuuiAnnotator[bytes, bytes]):
         if binary is None:
             unavailable(
                 "GNFinder binary was not found.",
-                binary=os.getenv("GNFINDER_BINARY") or DEFAULT_GNFINDER_BINARY,
+                binary=DEFAULT_GNFINDER_BINARY,
             )
         await telemetry.info(
             "GNFinder legacy processing started", binary=binary, text_length=len(text)
         )
-        result = _run_gnfinder(
-            binary, text, float(os.getenv("GNFINDER_TIMEOUT_SECONDS", "120"))
-        )
+        result = _run_gnfinder(binary, text, 120.0)
         names = result.get("names")
         if not isinstance(names, list):
             names = []

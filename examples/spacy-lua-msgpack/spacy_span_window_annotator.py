@@ -7,7 +7,6 @@ from functools import lru_cache
 from time import time
 from typing import Any
 import json
-import os
 from duui_py.annotator import DuuiAnnotator
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
@@ -151,9 +150,7 @@ def _language(doc: V1RequestEnvelope) -> str:
         value = doc.parameters.get(key)
         if value:
             return str(value)
-    return getattr(doc.sofa, "language", None) or os.environ.get(
-        "SPACY_MODEL_LANG", "de"
-    )
+    return getattr(doc.sofa, "language", None) or "de"
 
 
 def _model_name(doc: V1RequestEnvelope) -> str:
@@ -161,11 +158,6 @@ def _model_name(doc: V1RequestEnvelope) -> str:
         value = doc.parameters.get(key)
         if value:
             return str(value)
-    env_model = os.environ.get("SPACY_MODEL_NAME") or os.environ.get(
-        "TEXTIMAGER_SPACY_SINGLE_MODEL"
-    )
-    if env_model:
-        return env_model
     language = _language(doc)
     variant = str(
         doc.parameters.get("model_variant")
@@ -192,7 +184,7 @@ def _model_name(doc: V1RequestEnvelope) -> str:
 
 def _outputs(parameters: dict[str, object]) -> set[str]:
     variant = str(
-        parameters.get("variant") or os.environ.get("TEXTIMAGER_SPACY_VARIANT") or ""
+        parameters.get("variant") or ""
     )
     outputs = set(VARIANT_OUTPUTS.get(variant, VARIANT_OUTPUTS[""]))
     outputs.difference_update(_parse_exclude(parameters.get("exclude")))

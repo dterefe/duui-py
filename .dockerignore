@@ -18,6 +18,8 @@ examples/*
 !examples/taxonerd-legacy-lua/**
 !examples/spacy-lua-msgpack/
 !examples/spacy-lua-msgpack/**
+!examples/spacy-legacy-lua/
+!examples/spacy-legacy-lua/**
 !examples/gazetteer-msgpack-lua/
 !examples/gazetteer-msgpack-lua/**
 !examples/gazetteer-legacy-lua/

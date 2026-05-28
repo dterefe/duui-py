@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
-import os
 from pathlib import Path
 from typing import Any, get_args, get_origin
 import xml.etree.ElementTree as ET
@@ -45,13 +44,13 @@ class WirePlan:
 
     @classmethod
     def from_config(cls, config: AnnotatorConfig) -> "WirePlan":
-        protocol = os.getenv("DUUI_WIRE_PROTOCOL", config.wire.protocol)
+        protocol = config.wire.protocol
         if protocol in UNSUPPORTED_PROTOCOLS:
             raise NotImplementedError(
                 f"{protocol} is reserved in the protocol matrix but requires a protobuf Java/Lua helper"
             )
         resolved_protocol = PROTOCOL_ALIASES.get(protocol, protocol)
-        compression = os.getenv("DUUI_WIRE_COMPRESSION", config.wire.compression)
+        compression = config.wire.compression
         if resolved_protocol in {"compressed-msgpack-columnar", "runtime-msgpack-compressed"} and compression == "none":
             compression = "zlib"
         if compression not in {"none", "zlib"}:
