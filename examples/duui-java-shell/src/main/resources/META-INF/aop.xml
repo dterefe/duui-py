@@ -1,8 +1,0 @@
-<aspectj>
-  <aspects>
-    <aspect name="duui.async.weaving.DUUIPhaseAspect"/>
-  </aspects>
-  <weaver options="-Xlint:ignore">
-    <include within="duui.async..*"/>
-  </weaver>
-</aspectj>

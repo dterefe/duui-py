@@ -1,9 +1,0 @@
-filter_path = "resources/filter_de.txt"
-generate_abbrv = false
-generate_ngrams = false
-
-[corpora]
-[corpora.geonames]
-path = "resources/geonames.tsv.gz"
-generate_abbrv = false
-generate_skip_grams = false

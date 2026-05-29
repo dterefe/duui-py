@@ -1,2 +1,0 @@
-annotator,documents,chars_min,chars_max,baseline_total_ms,async_total_ms,total_speedup_x,median_speedup_x,baseline_median_ms,async_median_ms,baseline_p95_ms,async_p95_ms,delta_total_ms,baseline_request_bytes_total,async_request_bytes_total,baseline_response_bytes_total,async_response_bytes_total,output_equal_rows,missing_numeric_metrics
-TaxoNERD GBIF,8,5410,22461,627396,617952,1.015282740407022,1.0205221567652798,44778.0,44923.5,216349.19999999995,214137.59999999995,9444,126776,128713,40832,28169,8,0

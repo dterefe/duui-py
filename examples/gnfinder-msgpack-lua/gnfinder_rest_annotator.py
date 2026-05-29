@@ -3,9 +3,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import json
-import logging
 import subprocess
-import threading
 from collections.abc import AsyncIterator
 from time import sleep, time
 from urllib.error import HTTPError, URLError
@@ -16,6 +14,7 @@ from duui_py.annotator import DuuiAnnotator
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
 from duui_py.errors import bad_gateway, timeout, unavailable
+from duui_py.logging.core import get_configured_event_logger
 from duui_py.models import (
     AnnotatorConfig,
     AnnotatorDescriptor,
@@ -35,68 +34,76 @@ from duui_py.telemetry import telemetry
 
 from gnfinder_annotator import _name_to_taxon, _resolve_binary, _to_bool, _to_int
 
-logger = logging.getLogger(__name__)
-
 DEFAULT_GNFINDER_API_PORT = 18999
-_BACKEND_LOCK = threading.Lock()
+_BACKEND_LOCK = asyncio.Lock()
 _BACKEND_PROCESS: subprocess.Popen[bytes] | None = None
 
 
-def _backend_url(parameters: dict[str, object]) -> str:
+async def _backend_url(parameters: dict[str, object]) -> str:
+    logger = get_configured_event_logger()
     value = parameters.get("backend_url")
     if value is None or not str(value).strip():
-        value = _ensure_local_backend()
+        value = await _ensure_local_backend()
     value = str(value).strip().rstrip("/")
     if value.endswith("/api/v1/find"):
         return value
     return value + "/api/v1/find"
 
 
-def _ensure_local_backend() -> str:
-    def _ensure_local_backend() -> str:
-        global _BACKEND_PROCESS
-        port = DEFAULT_GNFINDER_API_PORT
-        url = f"http://127.0.0.1:{port}"
-        if _backend_ready(url):
-            logger.debug("Local GNFinder REST backend already ready: %s", url)
+async def _ensure_local_backend() -> str:
+    logger = get_configured_event_logger()
+    global _BACKEND_PROCESS
+    port = DEFAULT_GNFINDER_API_PORT
+    url = f"http://127.0.0.1:{port}"
+    if await _backend_ready(url):
+        if logger is not None:
+            await logger.debug(f"Local GNFinder REST backend already ready: {url}")
+        return url
+    async with _BACKEND_LOCK:
+        if await _backend_ready(url):
+            if logger is not None:
+                await logger.debug(f"Local GNFinder REST backend became ready under lock: {url}")
             return url
-        with _BACKEND_LOCK:
-            if _backend_ready(url):
-                logger.debug("Local GNFinder REST backend became ready under lock: %s", url)
-                return url
-            if _BACKEND_PROCESS is None or _BACKEND_PROCESS.poll() is not None:
-                binary = _resolve_binary()
-                if binary is None:
-                    logger.error("No bundled GNFinder binary found for REST backend")
-                    unavailable(
-                        "No bundled GNFinder binary found.",
-                        path="duui-uima/duui-GNFinder/gnfinder",
-                    )
-                logger.info("Starting local GNFinder REST backend: binary=%s port=%d", binary, port)
-                _BACKEND_PROCESS = subprocess.Popen(
-                    [binary, "-p", str(port)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+        if _BACKEND_PROCESS is None or _BACKEND_PROCESS.poll() is not None:
+            binary = _resolve_binary()
+            if binary is None:
+                if logger is not None:
+                    await logger.error("No bundled GNFinder binary found for REST backend")
+                unavailable(
+                    "No bundled GNFinder binary found.",
+                    path="duui-uima/duui-GNFinder/gnfinder",
                 )
-                atexit.register(_stop_local_backend)
-            deadline = time() + 20
-            while time() < deadline:
-                if _backend_ready(url):
-                    logger.info("Local GNFinder REST backend ready: %s", url)
-                    return url
-                sleep(0.25)
-        logger.error("Local GNFinder REST backend did not become ready: %s", url)
-        unavailable("Bundled GNFinder REST backend did not become ready.", backend_url=url)
+            if logger is not None:
+                await logger.info(f"Starting local GNFinder REST backend: binary={binary} port={port}")
+            _BACKEND_PROCESS = subprocess.Popen(
+                [binary, "-p", str(port)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            atexit.register(_stop_local_backend)
+        deadline = time() + 20
+        while time() < deadline:
+            if await _backend_ready(url):
+                if logger is not None:
+                    await logger.info(f"Local GNFinder REST backend ready: {url}")
+                return url
+            await asyncio.sleep(0.25)
+    if logger is not None:
+        await logger.error(f"Local GNFinder REST backend did not become ready: {url}")
+    unavailable("Bundled GNFinder REST backend did not become ready.", backend_url=url)
+
 
 def _stop_local_backend() -> None:
     if _BACKEND_PROCESS is not None and _BACKEND_PROCESS.poll() is None:
         _BACKEND_PROCESS.terminate()
 
 
-def _backend_ready(url: str) -> bool:
+async def _backend_ready(url: str) -> bool:
     try:
-        with urlopen(url.rstrip("/") + "/api/v1/ping", timeout=1) as response:
-            return 200 <= response.status < 300
+        await asyncio.to_thread(
+            lambda: urlopen(url.rstrip("/") + "/api/v1/ping", timeout=1)
+        )
+        return True
     except Exception:
         return False
 
@@ -117,25 +124,41 @@ def _sources(value: object | None) -> list[int]:
     return out
 
 
-def _query_backend(
+async def _query_backend(
     backend_url: str, payload: dict[str, object], timeout_seconds: float
 ) -> dict[str, object]:
-    request = Request(
-        backend_url,
-        data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=timeout_seconds) as response:
-            parsed = json.loads(response.read().decode("utf-8"))
-            logger.debug("GNFinder REST backend responded successfully: %s", backend_url)
-    except HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        logger.error(
-            "GNFinder REST backend HTTP error: status=%s detail=%s url=%s",
-            exc.code, detail, backend_url,
+    logger = get_configured_event_logger()
+
+    def _http_request() -> dict[str, object]:
+        request = Request(
+            backend_url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            method="POST",
         )
+        try:
+            with urlopen(request, timeout=timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise HTTPError(
+                backend_url, exc.code, detail, exc.hdrs, exc.fp  # type: ignore[arg-type]
+            ) from exc
+        except (OSError, URLError, TimeoutError):
+            raise
+        except json.JSONDecodeError:
+            raise
+
+    try:
+        parsed = await asyncio.to_thread(_http_request)
+        if logger is not None:
+            await logger.debug(f"GNFinder REST backend responded successfully: {backend_url}")
+    except HTTPError as exc:
+        detail = str(exc)
+        if logger is not None:
+            await logger.error(
+                f"GNFinder REST backend HTTP error: status={exc.code} detail={detail} url={backend_url}",
+            )
         bad_gateway(
             "GNFinder REST backend returned an error.",
             status=exc.code,
@@ -143,27 +166,29 @@ def _query_backend(
             backend_url=backend_url,
         )
     except (OSError, URLError, TimeoutError) as exc:
-        logger.error(
-            "GNFinder REST backend request failed: %s url=%s", exc, backend_url,
-        )
+        if logger is not None:
+            await logger.error(
+                f"GNFinder REST backend request failed: {exc} url={backend_url}",
+            )
         bad_gateway(
             f"GNFinder REST backend request failed: {exc}",
             backend_url=backend_url,
         )
     except json.JSONDecodeError as exc:
-        logger.error(
-            "GNFinder REST backend returned invalid JSON: %s url=%s", exc, backend_url,
-        )
+        if logger is not None:
+            await logger.error(
+                f"GNFinder REST backend returned invalid JSON: {exc} url={backend_url}",
+            )
         bad_gateway(
             "GNFinder REST backend returned invalid JSON.",
             error=str(exc),
             backend_url=backend_url,
         )
     if not isinstance(parsed, dict):
-        logger.error(
-            "GNFinder REST backend unexpected root type: %s url=%s",
-            type(parsed).__name__, backend_url,
-        )
+        if logger is not None:
+            await logger.error(
+                f"GNFinder REST backend unexpected root type: {type(parsed).__name__} url={backend_url}",
+            )
         bad_gateway(
             "GNFinder REST backend returned an unexpected JSON root.",
             json_type=type(parsed).__name__,
@@ -237,14 +262,15 @@ class GNFinderRestAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         return MsgPackLuaCodec(self.config)
 
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
+        logger = get_configured_event_logger()
         started = time()
         text = sofa_text_value(doc.sofa) or ""
-        backend_url = _backend_url(doc.parameters)
+        backend_url = await _backend_url(doc.parameters)
         timeout_seconds = float(doc.parameters.get("timeout_seconds") or 120)
-        logger.info(
-            "GNFinder REST processing started: text_length=%d backend=%s timeout=%s",
-            len(text), backend_url, timeout_seconds,
-        )
+        if logger is not None:
+            await logger.info(
+                f"GNFinder REST processing started: text_length={len(text)} backend={backend_url} timeout={timeout_seconds}",
+            )
         verify = _to_bool(doc.parameters.get("verify"), True)
         sources = _sources(doc.parameters.get("sources"))
         all_matches = _to_bool(doc.parameters.get("all_matches"))
@@ -273,14 +299,12 @@ class GNFinderRestAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             all_matches=all_matches,
         )
         try:
-            result = await asyncio.to_thread(
-                _query_backend, backend_url, payload, timeout_seconds
-            )
+            result = await _query_backend(backend_url, payload, timeout_seconds)
         except TimeoutError:
-            logger.error(
-                "GNFinder REST backend timed out: timeout=%s url=%s",
-                timeout_seconds, backend_url,
-            )
+            if logger is not None:
+                await logger.error(
+                    f"GNFinder REST backend timed out: timeout={timeout_seconds} url={backend_url}",
+                )
             timeout(
                 "GNFinder REST backend timed out",
                 timeout_seconds=timeout_seconds,
@@ -298,10 +322,10 @@ class GNFinderRestAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 continue
             matches += 1
             yield _name_to_taxon(name, verify=verify)
-        logger.info(
-            "GNFinder REST extracted %d taxon annotations out of %d names",
-            matches, len(names),
-        )
+        if logger is not None:
+            await logger.info(
+                f"GNFinder REST extracted {matches} taxon annotations out of {len(names)} names",
+            )
         elapsed_ms = int((time() - started) * 1000)
         await telemetry.count(
             "gnfinder_rest_taxon_matches",
@@ -334,10 +358,10 @@ class GNFinderRestAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             matches=matches,
             elapsed_ms=elapsed_ms,
         )
-        logger.info(
-            "GNFinder REST processing completed: matches=%d elapsed_ms=%d",
-            matches, elapsed_ms,
-        )
+        if logger is not None:
+            await logger.info(
+                f"GNFinder REST processing completed: matches={matches} elapsed_ms={elapsed_ms}",
+            )
         yield AnnotatorMetaData(
             name=self.config.descriptor.name,
             version=self.config.descriptor.version,

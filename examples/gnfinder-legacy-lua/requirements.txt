@@ -1,3 +1,0 @@
-duui-py
-uvicorn[standard]>=0.27.0
-dkpro-cassis>=0.9.1

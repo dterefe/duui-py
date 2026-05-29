@@ -1,20 +1,19 @@
 from __future__ import annotations
 import asyncio
-import logging
+import json
+import os
 import queue
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from functools import lru_cache
 from time import time
 from typing import Any
-import json
 from duui_py.annotator import DuuiAnnotator
-
-logger = logging.getLogger(__name__)
 from duui_py.adapters import AsyncChunkedRequestAdapter
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
 from duui_py.errors import unavailable, unprocessable
+from duui_py.logging.core import get_configured_event_logger
 from duui_py.telemetry import telemetry
 from duui_py.models import (
     AnnotatorConfig,
@@ -116,6 +115,33 @@ DEFAULT_SPAN_PRIORITY = (
 )
 
 
+# ---------------------------------------------------------------------------
+# GPU detection helper
+# ---------------------------------------------------------------------------
+def _gpu_available() -> bool:
+    """Check if a CUDA GPU is available for spaCy."""
+    for env_var in ("CUDA_VISIBLE_DEVICES", "CUDA_DEVICE_ORDER"):
+        if os.environ.get(env_var, "").strip():
+            return True
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except Exception:
+        pass
+    try:
+        import spacy
+        spacy.prefer_gpu()
+        return True
+    except Exception:
+        pass
+    return False
+
+
+
+
+# ---------------------------------------------------------------------------
+# Domain data classes
+# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class TextWindow:
     begin: int
@@ -165,7 +191,7 @@ def _model_name(doc: V1RequestEnvelope) -> str:
     variant = str(
         doc.parameters.get("model_variant")
         or doc.parameters.get("spacy_model_size")
-        or "efficiency"
+        or "trf"
     )
     if variant not in SPACY_MODELS:
         unprocessable(
@@ -219,13 +245,19 @@ def _int(value: object, default: int, minimum: int = 1) -> int:
 
 
 @lru_cache(maxsize=4)
-def _load_spacy(model_name: str, exclude: tuple[str, ...]) -> Any:
+def _load_spacy(model_name: str, exclude: tuple[str, ...], prefer_gpu: bool = True) -> Any:
     try:
         import spacy
     except Exception as exc:
         unavailable(
             "spaCy is not installed in this runtime.", exception=type(exc).__name__
         )
+    if prefer_gpu and _gpu_available():
+        try:
+            spacy.prefer_gpu()
+            print("spaCy: GPU enabled for model: %s" % model_name, flush=True)
+        except Exception:
+            print("spaCy: GPU not available, using CPU for model: %s" % model_name, flush=True)
     try:
         return spacy.load(model_name, exclude=list(exclude))
     except Exception as exc:
@@ -632,12 +664,12 @@ class SpacySpanWindowAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             "model_name": {
                 "type": "string",
                 "description": "Exact spaCy model package name.",
-                "default": "de_core_news_sm",
+                "default": "de_dep_news_trf",
             },
             "model_variant": {
                 "type": "string",
                 "description": "Legacy variant alias: efficiency, accuracy/trf, sm.",
-                "default": "efficiency",
+                "default": "trf",
             },
             "spacy_language": {
                 "type": "string",
@@ -668,13 +700,17 @@ class SpacySpanWindowAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
 
     @telemetry.timed("spacy_span_window_processing_ms", annotator="spacy-span-window")
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
+        logger = get_configured_event_logger()
         started = time()
-        logger.info("spaCy span-window process() started")
+        if logger is not None:
+            await logger.info("spaCy span-window process() started")
         model_name = _model_name(doc)
-        logger.info("spaCy span-window model resolved: %s", model_name)
+        if logger is not None:
+            await logger.info(f"spaCy span-window model resolved: {model_name}")
         exclude = _parse_exclude(doc.parameters.get("exclude"))
         outputs = _outputs(doc.parameters)
-        logger.debug("spaCy span-window outputs: %s exclude=%s", sorted(outputs), sorted(exclude))
+        if logger is not None:
+            await logger.debug(f"spaCy span-window outputs: {sorted(outputs)} exclude={sorted(exclude)}")
         max_window_chars = _int(
             doc.parameters.get("max_window_chars"), 2500, minimum=256
         )
@@ -682,16 +718,14 @@ class SpacySpanWindowAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         batch_size = _int(doc.parameters.get("batch_size"), 8)
         text = sofa_text_value(doc.sofa) or ""
         preferred_span_types = _span_types(doc.parameters.get("span_types"))
-        logger.info(
-            "spaCy span-window config: max_window_chars=%d overlap_chars=%d batch_size=%d text_length=%d",
-            max_window_chars,
-            overlap_chars,
-            batch_size,
-            len(text),
-        )
+        if logger is not None:
+            await logger.info(
+                f"spaCy span-window config: max_window_chars={max_window_chars} overlap_chars={overlap_chars} batch_size={batch_size} text_length={len(text)}",
+            )
         if sofa_kind(doc.sofa) == "annotation_spans":
             spans = []
-            logger.info("spaCy span-window: using annotation_spans sofa kind")
+            if logger is not None:
+                await logger.info("spaCy span-window: using annotation_spans sofa kind")
             windows = list(
                 _feature_windows(
                     doc.fs, preferred_span_types, max_window_chars, overlap_chars
@@ -701,11 +735,13 @@ class SpacySpanWindowAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             if not text:
                 unprocessable("spaCy span-window variant requires text input.")
             spans = _select_spans(doc.fs, len(text), preferred_span_types)
-            logger.info("spaCy span-window: selected %d spans from %d feature structures", len(spans), len(doc.fs))
+            if logger is not None:
+                await logger.info(f"spaCy span-window: selected {len(spans)} spans from {len(doc.fs)} feature structures")
             windows = list(_windows(text, spans, max_window_chars, overlap_chars))
         if not windows:
             unprocessable("No usable spaCy input windows were found.")
-        logger.info("spaCy span-window: %d windows built from %d spans", len(windows), len(spans))
+        if logger is not None:
+            await logger.info(f"spaCy span-window: {len(windows)} windows built from {len(spans)} spans")
         await telemetry.trace(
             "spaCy span-window processing started",
             model=model_name,
@@ -716,24 +752,31 @@ class SpacySpanWindowAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             windows=len(windows),
             max_window_chars=max_window_chars,
         )
-        logger.info("spaCy span-window loading model: %s", model_name)
-        nlp = await asyncio.to_thread(_load_spacy, model_name, tuple(sorted(exclude)))
-        logger.info("spaCy span-window model loaded: %s", model_name)
+        if logger is not None:
+            await logger.info(f"spaCy span-window loading model: {model_name}")
+        nlp = await asyncio.to_thread(
+            _load_spacy, model_name, tuple(sorted(exclude)), _gpu_available()
+        )
+        if logger is not None:
+            await logger.info(f"spaCy span-window model loaded: {model_name}")
         model_meta = getattr(nlp, "meta", {}) or {}
         model_version = str(model_meta.get("version", "runtime"))
         model_lang = str(model_meta.get("lang", "x-unspecified"))
         counts: dict[str, int] = {}
         total = 0
-        logger.info("spaCy span-window: starting annotation iteration for %d windows", len(windows))
+        if logger is not None:
+            await logger.info(f"spaCy span-window: starting annotation iteration for {len(windows)} windows")
         async for annotation in _iter_window_annotations_threaded(
             nlp, windows, outputs, batch_size
         ):
             counts[annotation.type] = counts.get(annotation.type, 0) + 1
             total += 1
             yield annotation
-        logger.info("spaCy span-window: yielded %d annotations breakdown=%s", total, counts)
+        if logger is not None:
+            await logger.info(f"spaCy span-window: yielded {total} annotations breakdown={counts}")
         elapsed_ms = int((time() - started) * 1000)
-        logger.info("spaCy span-window: completed in %d ms", elapsed_ms)
+        if logger is not None:
+            await logger.info(f"spaCy span-window: completed in {elapsed_ms} ms")
         await telemetry.count("spacy_span_window_annotations", total, model=model_name)
         await telemetry.count(
             "spacy_span_window_windows", len(windows), model=model_name
@@ -749,7 +792,8 @@ class SpacySpanWindowAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             windows=len(windows),
             elapsed_ms=elapsed_ms,
         )
-        logger.info("spaCy span-window: yielding metadata and modification documents")
+        if logger is not None:
+            await logger.info("spaCy span-window: yielding metadata and modification documents")
         yield AnnotatorMetaData(
             name=self.config.descriptor.name,
             version=self.config.descriptor.version,

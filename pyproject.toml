@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "duui-py"
-version = "0.1.0"
+version = "0.5.0-beta"
 description = "DUUI Python framework to build DUUI compatible Annotators"
 readme = "README.md"
 requires-python = ">=3.10"

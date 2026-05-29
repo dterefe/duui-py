@@ -1,8 +1,0 @@
-Accepted evaluation report state
-
-This report bundle now points to exact-baseline-vs-async-rework-only.
-The previous broad-run status dump was removed because it mixed unrelated dirty worktree state with rejected evaluation artifacts.
-
-Runtime path: DUUI rework runtime only.
-Baseline setting: streamingTransport(false).
-Async setting: streamingTransport(true).

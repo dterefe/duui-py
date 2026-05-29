@@ -611,6 +611,16 @@
 
         <typeDescription>
 
+            <name>de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.PUNCT</name>
+
+            <description/>
+
+            <supertypeName>de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.Dependency</supertypeName>
+
+        </typeDescription>
+
+        <typeDescription>
+
             <name>de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity</name>
 
             <description/>

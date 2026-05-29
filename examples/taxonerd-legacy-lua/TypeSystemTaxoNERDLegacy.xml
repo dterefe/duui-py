@@ -99,6 +99,46 @@
             </features>
         </typeDescription>
         <typeDescription>
+            <name>de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence</name>
+            <description>Input span type used by descriptor-driven TaxoNERD window strategies.</description>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+        </typeDescription>
+        <typeDescription>
+            <name>de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Paragraph</name>
+            <description>Input span type used by descriptor-driven TaxoNERD window strategies.</description>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+        </typeDescription>
+        <typeDescription>
+            <name>de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Div</name>
+            <description>Input span type used by descriptor-driven TaxoNERD window strategies.</description>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+        </typeDescription>
+        <typeDescription>
+            <name>org.hucompute.textimager.uima.type.segmentation.Div</name>
+            <description>Input span type used by descriptor-driven TaxoNERD window strategies.</description>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+        </typeDescription>
+        <typeDescription>
+            <name>org.texttechnologylab.annotation.paper.Section</name>
+            <description>Input span type used by descriptor-driven TaxoNERD window strategies.</description>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+        </typeDescription>
+        <typeDescription>
+            <name>org.texttechnologylab.annotation.paper.Title</name>
+            <description>Input span type used by descriptor-driven TaxoNERD window strategies.</description>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+        </typeDescription>
+        <typeDescription>
+            <name>org.texttechnologylab.annotation.ocr.OCRParagraph</name>
+            <description>Input span type used by descriptor-driven TaxoNERD window strategies.</description>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+        </typeDescription>
+        <typeDescription>
+            <name>org.texttechnologylab.annotation.ocr.abbyy.Paragraph</name>
+            <description>Input span type used by descriptor-driven TaxoNERD window strategies.</description>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+        </typeDescription>
+        <typeDescription>
             <name>org.texttechnologylab.annotation.type.concept.Taxon</name>
             <description/>
             <supertypeName>org.texttechnologylab.annotation.AbstractNamedEntity</supertypeName>
