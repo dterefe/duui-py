@@ -21,6 +21,7 @@ RUN pip install --no-cache-dir -e /app \
         "threadpoolctl>=3.1.0" \
         "nmslib>=1.7.3.6" \
         "textract>=1.6.5" \
+        "torch>=2.0.0" \
     && pip install --no-cache-dir --no-deps "scispacy==0.5.4" \
     && pip install --no-cache-dir --no-deps git+https://github.com/abrami/taxonerd
 

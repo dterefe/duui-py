@@ -20,9 +20,11 @@ RUN pip install --no-cache-dir -e /app \
         "threadpoolctl>=3.1.0" \
         "nmslib>=1.7.3.6" \
         "textract>=1.6.5" \
+        "torch>=2.0.0" \
     && pip install --no-cache-dir --no-deps "scispacy==0.5.4" \
-    && pip install --no-cache-dir --no-deps git+https://github.com/abrami/taxonerd \
-    && pip install --no-cache-dir https://github.com/nleguillarme/taxonerd/releases/download/v1.5.4/en_ner_eco_md-1.1.0.tar.gz \
+    && pip install --no-cache-dir --no-deps git+https://github.com/abrami/taxonerd
+
+RUN pip install --no-cache-dir https://github.com/nleguillarme/taxonerd/releases/download/v1.5.4/en_ner_eco_md-1.1.0.tar.gz \
     && pip install --no-cache-dir https://github.com/nleguillarme/taxonerd/releases/download/v1.5.4/en_ner_eco_md_weak-1.1.0.tar.gz
 
 WORKDIR /app/examples/taxonerd-legacy-lua

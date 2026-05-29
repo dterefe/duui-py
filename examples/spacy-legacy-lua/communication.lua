@@ -110,7 +110,6 @@ function deserialize(inputCas, inputStream)
                 meta_anno:addToIndexes()
             end
         end
-        end
     end
 
     -- Add tokens
@@ -365,5 +364,6 @@ function deserialize(inputCas, inputStream)
             meta_anno:setModelSpacyGitVersion(meta["modelSpacyGitVersion"])
             meta_anno:addToIndexes()
         end
+    end
     end
 end
