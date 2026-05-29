@@ -69,11 +69,13 @@ function deserialize(inputCas, inputStream)
 
     -- Add modification annotation
     local modification_meta = results["modification_meta"]
-    local modification_anno = luajava.newInstance("org.texttechnologylab.annotation.DocumentModification", inputCas)
-    modification_anno:setUser(modification_meta["user"])
-    modification_anno:setTimestamp(modification_meta["timestamp"])
-    modification_anno:setComment(modification_meta["comment"])
-    modification_anno:addToIndexes()
+    if modification_meta ~= nil then
+        local modification_anno = luajava.newInstance("org.texttechnologylab.annotation.DocumentModification", inputCas)
+        modification_anno:setUser(modification_meta["user"])
+        modification_anno:setTimestamp(modification_meta["timestamp"])
+        modification_anno:setComment(modification_meta["comment"])
+        modification_anno:addToIndexes()
+    end
 
     -- Get meta data, this is the same for every annotation
     local meta = results["meta"]
@@ -82,28 +84,32 @@ function deserialize(inputCas, inputStream)
     local is_pretokenized = results["is_pretokenized"]
 
     -- Add sentences
-    for i, sent in ipairs(results["sentences"]) do
-        -- Writing can be disabled via parameters
-        -- Note: spaCy will still run the full pipeline, and all results are based on these results
-        if sent["write_sentence"] then
-            -- Create sentence annotation
-            local sent_anno = luajava.newInstance("de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence", inputCas)
-            sent_anno:setBegin(sent["begin"])
-            sent_anno:setEnd(sent["end"])
-            sent_anno:addToIndexes()
+    local sentences = results["sentences"]
+    if sentences ~= nil then
+        for i, sent in ipairs(sentences) do
+            -- Writing can be disabled via parameters
+            -- Note: spaCy will still run the full pipeline, and all results are based on these results
+            if sent["write_sentence"] then
+                -- Create sentence annotation
+                local sent_anno = luajava.newInstance("de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence", inputCas)
+                sent_anno:setBegin(sent["begin"])
+                sent_anno:setEnd(sent["end"])
+                sent_anno:addToIndexes()
 
-            -- Create annotator meta data annotation, using the base meta data
-            local meta_anno = luajava.newInstance("org.texttechnologylab.annotation.SpacyAnnotatorMetaData", inputCas)
-            meta_anno:setReference(sent_anno)
-            meta_anno:setName(meta["name"])
-            meta_anno:setVersion(meta["version"])
-            meta_anno:setModelName(meta["modelName"])
-            meta_anno:setModelVersion(meta["modelVersion"])
-            meta_anno:setSpacyVersion(meta["spacyVersion"])
-            meta_anno:setModelLang(meta["modelLang"])
-            meta_anno:setModelSpacyVersion(meta["modelSpacyVersion"])
-            meta_anno:setModelSpacyGitVersion(meta["modelSpacyGitVersion"])
-            meta_anno:addToIndexes()
+                -- Create annotator meta data annotation, using the base meta data
+                local meta_anno = luajava.newInstance("org.texttechnologylab.annotation.SpacyAnnotatorMetaData", inputCas)
+                meta_anno:setReference(sent_anno)
+                meta_anno:setName(meta["name"])
+                meta_anno:setVersion(meta["version"])
+                meta_anno:setModelName(meta["modelName"])
+                meta_anno:setModelVersion(meta["modelVersion"])
+                meta_anno:setSpacyVersion(meta["spacyVersion"])
+                meta_anno:setModelLang(meta["modelLang"])
+                meta_anno:setModelSpacyVersion(meta["modelSpacyVersion"])
+                meta_anno:setModelSpacyGitVersion(meta["modelSpacyGitVersion"])
+                meta_anno:addToIndexes()
+            end
+        end
         end
     end
 
@@ -119,7 +125,9 @@ function deserialize(inputCas, inputStream)
             tokens_count = tokens_count + 1
         end
     end
-    for i, token in ipairs(results["tokens"]) do
+    local result_tokens = results["tokens"]
+    if result_tokens ~= nil then
+        for i, token in ipairs(result_tokens) do
         -- Save current token
         local token_anno = nil
         if is_pretokenized then
@@ -281,9 +289,12 @@ function deserialize(inputCas, inputStream)
             meta_anno:addToIndexes()
         end
     end
+    end
 
     -- Add dependencies
-    for i, dep in ipairs(results["dependencies"]) do
+    local result_deps = results["dependencies"]
+    if result_deps ~= nil then
+        for i, dep in ipairs(result_deps) do
         if dep["write_dep"] then
             -- Create specific annotation based on type
             local dep_anno
@@ -306,7 +317,7 @@ function deserialize(inputCas, inputStream)
             end
 
             dependent_token = all_tokens[dep["dependent_ind"]]
-            if governor_token ~= nil then
+            if dependent_token ~= nil then
                 dep_anno:setDependent(dependent_token)
             end
 
@@ -329,9 +340,12 @@ function deserialize(inputCas, inputStream)
             meta_anno:addToIndexes()
         end
     end
+    end
 
     -- Add entities
-    for i, ent in ipairs(results["entities"]) do
+    local result_ents = results["entities"]
+    if result_ents ~= nil then
+        for i, ent in ipairs(result_ents) do
         if ent["write_entity"] then
             local ent_anno = luajava.newInstance("de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity", inputCas)
             ent_anno:setBegin(ent["begin"])

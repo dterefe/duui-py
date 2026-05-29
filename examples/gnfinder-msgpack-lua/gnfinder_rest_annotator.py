@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import json
+import logging
 import subprocess
 import threading
 from collections.abc import AsyncIterator
@@ -34,6 +35,8 @@ from duui_py.telemetry import telemetry
 
 from gnfinder_annotator import _name_to_taxon, _resolve_binary, _to_bool, _to_int
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_GNFINDER_API_PORT = 18999
 _BACKEND_LOCK = threading.Lock()
 _BACKEND_PROCESS: subprocess.Popen[bytes] | None = None
@@ -50,34 +53,40 @@ def _backend_url(parameters: dict[str, object]) -> str:
 
 
 def _ensure_local_backend() -> str:
-    global _BACKEND_PROCESS
-    port = DEFAULT_GNFINDER_API_PORT
-    url = f"http://127.0.0.1:{port}"
-    if _backend_ready(url):
-        return url
-    with _BACKEND_LOCK:
+    def _ensure_local_backend() -> str:
+        global _BACKEND_PROCESS
+        port = DEFAULT_GNFINDER_API_PORT
+        url = f"http://127.0.0.1:{port}"
         if _backend_ready(url):
+            logger.debug("Local GNFinder REST backend already ready: %s", url)
             return url
-        if _BACKEND_PROCESS is None or _BACKEND_PROCESS.poll() is not None:
-            binary = _resolve_binary()
-            if binary is None:
-                unavailable(
-                    "No bundled GNFinder binary found.",
-                    path="duui-uima/duui-GNFinder/gnfinder",
-                )
-            _BACKEND_PROCESS = subprocess.Popen(
-                [binary, "-p", str(port)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            atexit.register(_stop_local_backend)
-        deadline = time() + 20
-        while time() < deadline:
+        with _BACKEND_LOCK:
             if _backend_ready(url):
+                logger.debug("Local GNFinder REST backend became ready under lock: %s", url)
                 return url
-            sleep(0.25)
-    unavailable("Bundled GNFinder REST backend did not become ready.", backend_url=url)
-
+            if _BACKEND_PROCESS is None or _BACKEND_PROCESS.poll() is not None:
+                binary = _resolve_binary()
+                if binary is None:
+                    logger.error("No bundled GNFinder binary found for REST backend")
+                    unavailable(
+                        "No bundled GNFinder binary found.",
+                        path="duui-uima/duui-GNFinder/gnfinder",
+                    )
+                logger.info("Starting local GNFinder REST backend: binary=%s port=%d", binary, port)
+                _BACKEND_PROCESS = subprocess.Popen(
+                    [binary, "-p", str(port)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                atexit.register(_stop_local_backend)
+            deadline = time() + 20
+            while time() < deadline:
+                if _backend_ready(url):
+                    logger.info("Local GNFinder REST backend ready: %s", url)
+                    return url
+                sleep(0.25)
+        logger.error("Local GNFinder REST backend did not become ready: %s", url)
+        unavailable("Bundled GNFinder REST backend did not become ready.", backend_url=url)
 
 def _stop_local_backend() -> None:
     if _BACKEND_PROCESS is not None and _BACKEND_PROCESS.poll() is None:
@@ -120,8 +129,13 @@ def _query_backend(
     try:
         with urlopen(request, timeout=timeout_seconds) as response:
             parsed = json.loads(response.read().decode("utf-8"))
+            logger.debug("GNFinder REST backend responded successfully: %s", backend_url)
     except HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
+        logger.error(
+            "GNFinder REST backend HTTP error: status=%s detail=%s url=%s",
+            exc.code, detail, backend_url,
+        )
         bad_gateway(
             "GNFinder REST backend returned an error.",
             status=exc.code,
@@ -129,17 +143,27 @@ def _query_backend(
             backend_url=backend_url,
         )
     except (OSError, URLError, TimeoutError) as exc:
+        logger.error(
+            "GNFinder REST backend request failed: %s url=%s", exc, backend_url,
+        )
         bad_gateway(
             f"GNFinder REST backend request failed: {exc}",
             backend_url=backend_url,
         )
     except json.JSONDecodeError as exc:
+        logger.error(
+            "GNFinder REST backend returned invalid JSON: %s url=%s", exc, backend_url,
+        )
         bad_gateway(
             "GNFinder REST backend returned invalid JSON.",
             error=str(exc),
             backend_url=backend_url,
         )
     if not isinstance(parsed, dict):
+        logger.error(
+            "GNFinder REST backend unexpected root type: %s url=%s",
+            type(parsed).__name__, backend_url,
+        )
         bad_gateway(
             "GNFinder REST backend returned an unexpected JSON root.",
             json_type=type(parsed).__name__,
@@ -217,6 +241,10 @@ class GNFinderRestAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         text = sofa_text_value(doc.sofa) or ""
         backend_url = _backend_url(doc.parameters)
         timeout_seconds = float(doc.parameters.get("timeout_seconds") or 120)
+        logger.info(
+            "GNFinder REST processing started: text_length=%d backend=%s timeout=%s",
+            len(text), backend_url, timeout_seconds,
+        )
         verify = _to_bool(doc.parameters.get("verify"), True)
         sources = _sources(doc.parameters.get("sources"))
         all_matches = _to_bool(doc.parameters.get("all_matches"))
@@ -249,6 +277,10 @@ class GNFinderRestAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 _query_backend, backend_url, payload, timeout_seconds
             )
         except TimeoutError:
+            logger.error(
+                "GNFinder REST backend timed out: timeout=%s url=%s",
+                timeout_seconds, backend_url,
+            )
             timeout(
                 "GNFinder REST backend timed out",
                 timeout_seconds=timeout_seconds,
@@ -266,6 +298,10 @@ class GNFinderRestAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 continue
             matches += 1
             yield _name_to_taxon(name, verify=verify)
+        logger.info(
+            "GNFinder REST extracted %d taxon annotations out of %d names",
+            matches, len(names),
+        )
         elapsed_ms = int((time() - started) * 1000)
         await telemetry.count(
             "gnfinder_rest_taxon_matches",
@@ -297,6 +333,10 @@ class GNFinderRestAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             "GNFinder REST processing completed",
             matches=matches,
             elapsed_ms=elapsed_ms,
+        )
+        logger.info(
+            "GNFinder REST processing completed: matches=%d elapsed_ms=%d",
+            matches, elapsed_ms,
         )
         yield AnnotatorMetaData(
             name=self.config.descriptor.name,

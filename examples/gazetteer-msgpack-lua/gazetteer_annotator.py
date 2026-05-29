@@ -8,6 +8,7 @@ import atexit
 import asyncio
 import http.client
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -35,6 +36,7 @@ from duui_py.models.uima_typesystem.texttechnologylab.annotation.type.types impo
 
 TAXON_TYPE = Taxon.model_fields["type"].default
 
+logger = logging.getLogger(__name__)
 
 DEFAULT_GAZETTEER_RS_PORT = 18001
 _BACKEND_LOCK = threading.Lock()
@@ -46,16 +48,23 @@ _HTTP_LOCAL = threading.local()
 def _configured_backend_url(parameters: dict[str, object]) -> str | None:
     value = parameters.get("backend_url")
     if value is None or not str(value).strip():
+        logger.debug("No backend_url parameter configured, will use local backend")
         return None
-    return _normalize_backend_url(str(value).strip())
+    url = _normalize_backend_url(str(value).strip())
+    logger.info("Using configured backend_url: %s", url)
+    return url
 
 
 async def _resolve_backend_url(parameters: dict[str, object]) -> str:
+    logger.debug("Resolving gazetteer-rs backend URL")
     configured = _configured_backend_url(parameters)
     if configured is not None:
+        logger.debug("Resolved backend via configured URL: %s", configured)
         return configured
     if _BACKEND_URL_CACHE is not None:
+        logger.debug("Resolved backend from cache: %s", _BACKEND_URL_CACHE)
         return _BACKEND_URL_CACHE
+    logger.info("No configured or cached backend, starting local gazetteer-rs")
     return await asyncio.to_thread(_ensure_local_backend)
 
 
@@ -72,14 +81,18 @@ def _ensure_local_backend() -> str:
     base_url = f"http://127.0.0.1:{port}"
     url = _normalize_backend_url(base_url)
     if _BACKEND_URL_CACHE is not None:
+        logger.debug("Local backend URL already cached: %s", _BACKEND_URL_CACHE)
         return _BACKEND_URL_CACHE
     if _backend_ready(url):
+        logger.info("Local gazetteer-rs backend already running at %s", url)
         _BACKEND_URL_CACHE = url
         return url
     with _BACKEND_LOCK:
         if _BACKEND_URL_CACHE is not None:
+            logger.debug("Local backend URL cached under lock: %s", _BACKEND_URL_CACHE)
             return _BACKEND_URL_CACHE
         if _backend_ready(url):
+            logger.info("Local gazetteer-rs backend became ready under lock at %s", url)
             _BACKEND_URL_CACHE = url
             return url
         if _BACKEND_PROCESS is None or _BACKEND_PROCESS.poll() is not None:
@@ -99,15 +112,31 @@ def _ensure_local_backend() -> str:
                 "--limit",
                 "536870912",
             ]
+            logger.info(
+                "Starting local gazetteer-rs backend: binary=%s config=%s port=%d",
+                binary, str(config), port,
+            )
             _BACKEND_PROCESS = subprocess.Popen(command, cwd=cwd)
             atexit.register(_stop_local_backend)
         startup_timeout = 120.0
         deadline = time() + startup_timeout
+        logger.debug(
+            "Waiting for gazetteer-rs backend to become ready (timeout=%.1fs)",
+            startup_timeout,
+        )
         while time() < deadline:
             if _backend_ready(url):
+                logger.info(
+                    "Local gazetteer-rs backend ready after %.1fs",
+                    time() - (deadline - startup_timeout),
+                )
                 _BACKEND_URL_CACHE = url
                 return url
             sleep(0.25)
+        logger.error(
+            "Local gazetteer-rs backend did not become ready within %.1fs",
+            startup_timeout,
+        )
     unavailable(
         "Bundled gazetteer-rs backend did not become ready.",
         backend_url=url,
@@ -118,6 +147,7 @@ def _ensure_local_backend() -> str:
 
 def _stop_local_backend() -> None:
     if _BACKEND_PROCESS is not None and _BACKEND_PROCESS.poll() is None:
+        logger.info("Stopping local gazetteer-rs backend (pid=%d)", _BACKEND_PROCESS.pid)
         _BACKEND_PROCESS.terminate()
 
 
@@ -160,6 +190,11 @@ def _backend_ready(url: str) -> bool:
 def _query_backend(
     backend_url: str, payload: dict[str, object], timeout_seconds: float
 ) -> object:
+    text_len = len(str(payload.get("text", "")))
+    logger.debug(
+        "Querying gazetteer-rs backend: url=%s text_length=%d timeout=%.1fs",
+        backend_url, text_len, timeout_seconds,
+    )
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     parsed = urlsplit(backend_url)
     path = parsed.path or "/"
@@ -179,12 +214,25 @@ def _query_backend(
             response = conn.getresponse()
             data = response.read()
             if response.status >= 400:
+                logger.error(
+                    "Gazetteer-rs backend HTTP error: status=%d reason=%s",
+                    response.status, response.reason,
+                )
                 raise OSError(
                     f"HTTP {response.status} {response.reason}: "
                     f"{data[:256].decode('utf-8', errors='replace')}"
                 )
-            return json.loads(data.decode("utf-8"))
-        except (OSError, http.client.HTTPException):
+            result = json.loads(data.decode("utf-8"))
+            logger.debug(
+                "Gazetteer-rs backend returned %d results",
+                len(result) if isinstance(result, list) else -1,
+            )
+            return result
+        except (OSError, http.client.HTTPException) as exc:
+            logger.warning(
+                "Gazetteer-rs backend request attempt %d failed: %s",
+                attempt + 1, exc,
+            )
             _drop_http_connection(key)
             if attempt == 0:
                 continue
@@ -262,18 +310,26 @@ class GazetteerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
     @telemetry.timed("gazetteer_processing_ms", annotator="gazetteer")
     async def process(self, doc: V1RequestEnvelope) -> AsyncIterator[object]:
         started = time()
+        logger.info("gazetteer process() start")
         text = sofa_text_value(doc.sofa) or ""
         timeout_seconds = float(
             doc.parameters.get("timeout")
             or doc.parameters.get("timeout_seconds")
             or 120
         )
+        logger.debug(
+            "gazetteer process: text_length=%d timeout=%.1fs params=%s",
+            len(text), timeout_seconds,
+            {k: v for k, v in doc.parameters.items() if k != "text"},
+        )
         payload: dict[str, object] = {"text": text}
         for key in ("max_len", "result_selection"):
             if key in doc.parameters:
                 payload[key] = doc.parameters[key]
+                logger.debug("gazetteer payload param: %s=%s", key, doc.parameters[key])
 
         backend_url = await _resolve_backend_url(doc.parameters)
+        logger.info("gazetteer invoking backend at %s", backend_url)
         await telemetry.trace(
             "Gazetteer process request configured",
             backend_url=backend_url,
@@ -286,6 +342,10 @@ class GazetteerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 _query_backend, backend_url, payload, timeout_seconds
             )
         except (OSError, URLError, TimeoutError) as exc:
+            logger.error(
+                "Gazetteer backend request failed: url=%s error=%s",
+                backend_url, exc,
+            )
             await telemetry.error(
                 "Gazetteer backend request failed",
                 backend_url=backend_url,
@@ -295,6 +355,10 @@ class GazetteerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 f"Gazetteer backend request failed: {exc}", backend_url=backend_url
             )
         except json.JSONDecodeError as exc:
+            logger.error(
+                "Gazetteer backend returned invalid JSON: url=%s error=%s",
+                backend_url, exc,
+            )
             await telemetry.error(
                 "Gazetteer backend returned invalid JSON",
                 backend_url=backend_url,
@@ -305,6 +369,10 @@ class GazetteerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 backend_url=backend_url,
             )
         if not isinstance(response, list):
+            logger.error(
+                "Gazetteer backend unexpected JSON root type: %s",
+                type(response).__name__,
+            )
             await telemetry.error(
                 "Gazetteer backend returned unexpected JSON root",
                 json_type=type(response).__name__,
@@ -315,17 +383,22 @@ class GazetteerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 json_type=type(response).__name__,
             )
 
+        logger.debug("Parsing %d gazetteer results into Taxon annotations", len(response))
         taxons: list[Taxon] = []
         skipped = 0
         for item in response:
             if not isinstance(item, dict):
                 skipped += 1
+                logger.debug("Skipping non-dict gazetteer result item: %s", type(item).__name__)
                 continue
             try:
                 begin = int(item["begin"])
                 end = int(item["end"])
-            except (KeyError, TypeError, ValueError):
+            except (KeyError, TypeError, ValueError) as exc:
                 skipped += 1
+                logger.debug(
+                    "Skipping gazetteer result with invalid begin/end: %s", exc,
+                )
                 continue
             value = item.get("match_strings")
             identifier = item.get("match_labels")
@@ -338,12 +411,20 @@ class GazetteerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 )
             )
         if skipped:
+            logger.warning(
+                "Gazetteer skipped %d malformed results out of %d",
+                skipped, len(response),
+            )
             await telemetry.warning(
                 "Gazetteer skipped malformed backend matches",
                 skipped=skipped,
                 returned=len(response),
             )
         elapsed_ms = int((time() - started) * 1000)
+        logger.info(
+            "gazetteer process() completed: matches=%d skipped=%d elapsed_ms=%d",
+            len(taxons), skipped, elapsed_ms,
+        )
         await telemetry.count("gazetteer_matches", len(taxons))
         await telemetry.debug(
             "Gazetteer processing completed",
@@ -358,6 +439,5 @@ class GazetteerAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             errors=[],
             sofa=None,
         )
-
 
 app = create_app(GazetteerAnnotator, request_adapter=AsyncChunkedRequestAdapter())

@@ -5,6 +5,7 @@ from urllib.request import Request, urlopen
 import atexit
 import asyncio
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -34,6 +35,8 @@ class GazetteerRequest(BaseModel):
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_GAZETTEER_RS_PORT = 18001
 _BACKEND_LOCK = threading.Lock()
 _BACKEND_PROCESS: subprocess.Popen[bytes] | None = None
@@ -43,8 +46,11 @@ _BACKEND_URL_CACHE: str | None = None
 def _backend_url(doc: GazetteerRequest) -> str:
     value = doc.parameters.get("backend_url")
     if value is None or not str(value).strip():
+        logger.debug("No backend_url configured, using local backend")
         return _ensure_local_backend()
-    return _normalize_backend_url(str(value).strip())
+    url = _normalize_backend_url(str(value).strip())
+    logger.info("Using configured backend_url: %s", url)
+    return url
 
 
 def _normalize_backend_url(value: str) -> str:
@@ -60,19 +66,27 @@ def _ensure_local_backend() -> str:
     base_url = f"http://127.0.0.1:{port}"
     url = _normalize_backend_url(base_url)
     if _BACKEND_URL_CACHE is not None:
+        logger.debug("Local backend URL already cached: %s", _BACKEND_URL_CACHE)
         return _BACKEND_URL_CACHE
     if _backend_ready(url):
+        logger.info("Local gazetteer-rs backend already running at %s", url)
         _BACKEND_URL_CACHE = url
         return url
     with _BACKEND_LOCK:
         if _BACKEND_URL_CACHE is not None:
+            logger.debug("Local backend URL cached under lock: %s", _BACKEND_URL_CACHE)
             return _BACKEND_URL_CACHE
         if _backend_ready(url):
+            logger.info("Local gazetteer-rs backend became ready under lock at %s", url)
             _BACKEND_URL_CACHE = url
             return url
         if _BACKEND_PROCESS is None or _BACKEND_PROCESS.poll() is not None:
             binary = _gazetteer_binary()
             config = _gazetteer_config()
+            logger.info(
+                "Starting local gazetteer-rs backend: binary=%s config=%s port=%d",
+                binary, str(config), port,
+            )
             _BACKEND_PROCESS = subprocess.Popen(
                 [
                     binary,
@@ -92,16 +106,29 @@ def _ensure_local_backend() -> str:
             atexit.register(_stop_local_backend)
         startup_timeout = 120.0
         deadline = time() + startup_timeout
+        logger.debug(
+            "Waiting for gazetteer-rs backend to become ready (timeout=%.1fs)",
+            startup_timeout,
+        )
         while time() < deadline:
             if _backend_ready(url):
+                logger.info(
+                    "Local gazetteer-rs backend ready after %.1fs",
+                    time() - (deadline - startup_timeout),
+                )
                 _BACKEND_URL_CACHE = url
                 return url
             sleep(0.25)
+        logger.error(
+            "Local gazetteer-rs backend did not become ready within %.1fs",
+            startup_timeout,
+        )
     unavailable("Bundled gazetteer-rs backend did not become ready.", backend_url=url)
 
 
 def _stop_local_backend() -> None:
     if _BACKEND_PROCESS is not None and _BACKEND_PROCESS.poll() is None:
+        logger.info("Stopping local gazetteer-rs backend (pid=%d)", _BACKEND_PROCESS.pid)
         _BACKEND_PROCESS.terminate()
 
 
@@ -146,6 +173,11 @@ def _backend_ready(url: str) -> bool:
 def _query_backend(
     backend_url: str, payload: dict[str, object], timeout_seconds: float
 ) -> object:
+    text_len = len(str(payload.get("text", "")))
+    logger.debug(
+        "Querying gazetteer-rs backend: url=%s text_length=%d timeout=%.1fs",
+        backend_url, text_len, timeout_seconds,
+    )
     request = Request(
         backend_url,
         data=json.dumps(payload).encode("utf-8"),
@@ -153,7 +185,12 @@ def _query_backend(
         method="POST",
     )
     with urlopen(request, timeout=timeout_seconds) as response:
-        return json.loads(response.read().decode("utf-8"))
+        result = json.loads(response.read().decode("utf-8"))
+        logger.debug(
+            "Gazetteer-rs backend returned %d results",
+            len(result) if isinstance(result, list) else -1,
+        )
+        return result
 
 
 class GazetteerLegacyAnnotator(
@@ -210,10 +247,15 @@ class GazetteerLegacyAnnotator(
     @telemetry.timed("gazetteer_legacy_processing_ms", annotator="gazetteer-legacy")
     async def process(self, doc: GazetteerRequest) -> list[dict[str, object]]:
         started = time()
+        logger.info("gazetteer-legacy process() start")
         timeout_seconds = float(
             doc.parameters.get("timeout")
             or doc.parameters.get("timeout_seconds")
             or 120
+        )
+        logger.debug(
+            "gazetteer-legacy process: text_length=%d timeout=%.1fs max_len=%s result_selection=%s",
+            len(doc.text), timeout_seconds, doc.max_len, doc.result_selection,
         )
         payload: dict[str, object] = {"text": doc.text}
         if doc.max_len is not None:
@@ -226,6 +268,7 @@ class GazetteerLegacyAnnotator(
             return await asyncio.to_thread(_backend_url, doc)
 
         backend_url = await resolve_backend()
+        logger.info("gazetteer-legacy invoking backend at %s", backend_url)
         await telemetry.trace(
             "Gazetteer legacy process request configured",
             backend_url=backend_url,
@@ -240,6 +283,10 @@ class GazetteerLegacyAnnotator(
         try:
             response = await request_backend()
         except (OSError, URLError, TimeoutError) as exc:
+            logger.error(
+                "Gazetteer legacy backend request failed: url=%s error=%s",
+                backend_url, exc,
+            )
             await telemetry.error(
                 "Gazetteer legacy backend request failed",
                 backend_url=backend_url,
@@ -249,6 +296,10 @@ class GazetteerLegacyAnnotator(
                 f"Gazetteer backend request failed: {exc}", backend_url=backend_url
             )
         except json.JSONDecodeError as exc:
+            logger.error(
+                "Gazetteer legacy backend returned invalid JSON: url=%s error=%s",
+                backend_url, exc,
+            )
             await telemetry.error(
                 "Gazetteer legacy backend returned invalid JSON",
                 backend_url=backend_url,
@@ -259,6 +310,10 @@ class GazetteerLegacyAnnotator(
                 backend_url=backend_url,
             )
         if not isinstance(response, list):
+            logger.error(
+                "Gazetteer legacy backend unexpected JSON root type: %s",
+                type(response).__name__,
+            )
             await telemetry.error(
                 "Gazetteer legacy backend returned unexpected JSON root",
                 backend_url=backend_url,
@@ -268,14 +323,27 @@ class GazetteerLegacyAnnotator(
                 "Gazetteer backend returned an unexpected JSON root.",
                 json_type=type(response).__name__,
             )
+
+        logger.debug("Filtering %d gazetteer legacy results", len(response))
+        filtered = [item for item in response if isinstance(item, dict)]
+        skipped = len(response) - len(filtered)
+        if skipped:
+            logger.warning(
+                "Gazetteer legacy skipped %d non-dict results out of %d",
+                skipped, len(response),
+            )
         elapsed_ms = int((time() - started) * 1000)
-        await telemetry.count("gazetteer_legacy_matches", len(response))
+        logger.info(
+            "gazetteer-legacy process() completed: matches=%d skipped=%d elapsed_ms=%d",
+            len(filtered), skipped, elapsed_ms,
+        )
+        await telemetry.count("gazetteer_legacy_matches", len(filtered))
         await telemetry.debug(
             "Gazetteer legacy processing completed",
-            matches=len(response),
+            matches=len(filtered),
             elapsed_ms=elapsed_ms,
         )
-        return [item for item in response if isinstance(item, dict)]
+        return filtered
 
 
 app = create_app(GazetteerLegacyAnnotator)

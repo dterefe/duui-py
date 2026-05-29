@@ -1,6 +1,8 @@
 from __future__ import annotations
 import asyncio
 import json
+import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -31,6 +33,8 @@ from duui_py.models.uima_typesystem.texttechnologylab.annotation.biofid.gnfinder
     GNFinderTaxon,
     VerifiedTaxon,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_GNFINDER_BINARY = "gnfinder"
 LEGACY_GNFINDER_BINARY = (
@@ -74,6 +78,10 @@ def _run_gnfinder(
     sources: str | None,
     words_around: int | None,
 ) -> dict[str, object]:
+    logger.debug(
+        "Running gnfinder CLI: binary=%s text_length=%d verify=%s lang=%s timeout=%s",
+        binary, len(text), verify, lang, timeout_seconds,
+    )
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
         handle.write(text)
         input_path = handle.name
@@ -109,6 +117,11 @@ def _run_gnfinder(
     finally:
         Path(input_path).unlink(missing_ok=True)
     if completed.returncode != 0:
+        logger.error(
+            "gnfinder CLI failed: returncode=%d stderr=%s",
+            completed.returncode,
+            completed.stderr.strip(),
+        )
         bad_gateway(
             "GNFinder process failed",
             returncode=completed.returncode,
@@ -116,7 +129,9 @@ def _run_gnfinder(
         )
     try:
         parsed = json.loads(completed.stdout)
+        logger.debug("gnfinder CLI returned valid JSON")
     except json.JSONDecodeError as exc:
+        logger.error("gnfinder CLI returned invalid JSON: %s", exc)
         bad_gateway("GNFinder returned invalid JSON", error=str(exc))
     if not isinstance(parsed, dict):
         bad_gateway(
@@ -329,8 +344,16 @@ class GNFinderAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
         sources = doc.parameters.get("sources")
         sources = str(sources) if sources is not None and str(sources).strip() else None
         words_around = _to_int(doc.parameters.get("words_around"))
+        logger.info(
+            "GNFinder processing started: text_length=%d lang=%s verify=%s utf8=%s timeout=%s",
+            len(text), lang, verify, utf8_input, timeout_seconds,
+        )
         binary = _resolve_binary(doc.parameters.get("gnfinder_binary"))
         if binary is None:
+            logger.error(
+                "GNFinder binary not available: configured=%s",
+                doc.parameters.get("gnfinder_binary") or DEFAULT_GNFINDER_BINARY,
+            )
             unavailable(
                 "GNFinder binary is not available",
                 configured_binary=str(
@@ -339,6 +362,7 @@ class GNFinderAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 ),
             )
         assert binary is not None
+        logger.debug("GNFinder resolved binary: %s", binary)
         await telemetry.info(
             "GNFinder processing started",
             text_length=len(text),
@@ -372,6 +396,9 @@ class GNFinderAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 words_around=words_around,
             )
         except subprocess.TimeoutExpired:
+            logger.error(
+                "GNFinder process timed out after %s seconds", timeout_seconds,
+            )
             timeout(
                 "GNFinder process timed out",
                 timeout_seconds=timeout_seconds,
@@ -390,6 +417,10 @@ class GNFinderAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
                 continue
             matches += 1
             taxons.append(_name_to_taxon(name, verify=verify))
+        logger.info(
+            "GNFinder extracted %d taxon annotations out of %d names (verify=%s)",
+            matches, len(names), verify,
+        )
         elapsed_ms = int((time() - started) * 1000)
         await telemetry.count(
             "gnfinder_taxon_matches", matches, lang=lang, verify=str(verify).lower()
@@ -401,6 +432,10 @@ class GNFinderAnnotator(DuuiAnnotator[V1RequestEnvelope, object]):
             matches=matches,
             elapsed_ms=elapsed_ms,
             verify=verify,
+        )
+        logger.info(
+            "GNFinder processing completed: matches=%d elapsed_ms=%d",
+            matches, elapsed_ms,
         )
         yield DuuiResult.model_construct(
             annotations=taxons,

@@ -4,7 +4,10 @@ from functools import lru_cache
 from time import time
 from typing import Any
 import json
+import logging
 from duui_py.annotator import DuuiAnnotator
+
+logger = logging.getLogger(__name__)
 from duui_py.app import create_app
 from duui_py.codecs.msgpack_lua import MsgPackLuaCodec
 from duui_py.errors import unavailable, unprocessable
@@ -325,9 +328,24 @@ def _build_window_annotations(
 ) -> tuple[list[object], int]:
     annotations: list[object] = []
     next_ref = start_ref
-    for spacy_doc, window in zip(spacy_docs, windows):
+    logger.info(
+        "_build_window_annotations: %d docs %d windows outputs=%s emit_sentences=%s",
+        len(spacy_docs),
+        len(windows),
+        sorted(outputs),
+        emit_sentences,
+    )
+    for win_idx, (spacy_doc, window) in enumerate(zip(spacy_docs, windows)):
         token_rows = [token for token in spacy_doc if not token.is_space]
         original_tokens = window.token_annotations
+        logger.debug(
+            "window[%d]: offset=%d text_len=%d tokens=%d pretokenized=%d",
+            win_idx,
+            window.offset,
+            len(window.text),
+            len(token_rows),
+            len(original_tokens),
+        )
         token_refs: dict[int, dict[str, int]] = {}
         token_features_by_i: dict[int, dict[str, Any]] = {}
         write_lemma = "lemmatizer" in outputs
@@ -346,7 +364,7 @@ def _build_window_annotations(
             next_ref += 1
             token_annotation = Token(begin=begin, end=end, ref=token_ref)
             token_features = token_annotation.features
-            token_key = order
+            token_key = token.i
             token_refs[token_key] = {"$ref": token_ref}
             token_features_by_i[token_key] = token_features
             annotations.append(token_annotation)
@@ -379,11 +397,12 @@ def _build_window_annotations(
                 )
 
         if "parser" in outputs:
+            logger.debug("window[%d]: building dependency annotations", win_idx)
             for token in token_rows:
                 if token.is_space:
                     continue
                 begin, end = token_span(token)
-                dep_type = token.dep_
+                dep_type = token.dep_.upper()
                 output_type = DEPENDENCY_TYPE
                 if dep_type == "ROOT":
                     output_type = ROOT_TYPE
@@ -408,13 +427,17 @@ def _build_window_annotations(
                     annotations.append(Dependency(begin=begin, end=end, **fields))
 
         if emit_sentences and "sentencizer" in outputs:
-            for sentence in spacy_doc.sents:
+            sents = list(spacy_doc.sents)
+            logger.debug("window[%d]: emitting %d sentence annotations", win_idx, len(sents))
+            for sentence in sents:
                 annotations.append(
                     Sentence(begin=window.offset + sentence.start_char, end=window.offset + sentence.end_char)
                 )
 
         if "ner" in outputs:
-            for entity in spacy_doc.ents:
+            entities = list(spacy_doc.ents)
+            logger.debug("window[%d]: emitting %d named entity annotations", win_idx, len(entities))
+            for entity in entities:
                 if original_tokens and entity.start < len(original_tokens):
                     begin = original_tokens[entity.start].begin
                     end = original_tokens[entity.end - 1].end
@@ -426,6 +449,9 @@ def _build_window_annotations(
                     entity_features["identifier"] = entity.kb_id_
                 annotations.append(NamedEntity(begin=begin, end=end, **entity_features))
 
+        logger.debug("window[%d]: accumulated %d annotations so far", win_idx, len(annotations))
+
+    logger.info("_build_window_annotations: finished, total=%d next_ref=%d", len(annotations), next_ref)
     return annotations, next_ref
 
 
@@ -535,24 +561,39 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
 
     async def process(self, doc: V1RequestEnvelope) -> DuuiResult:
         started = time()
+        logger.info("spaCy process() started")
         text = sofa_text_value(doc.sofa) or ""
         model_name = _model_name(doc)
+        logger.info("spaCy model resolved: model_name=%s text_length=%d", model_name, len(text))
         parameters = doc.parameters
         exclude = _parse_exclude(parameters.get("exclude"))
         outputs = _outputs(parameters)
+        logger.debug("spaCy outputs resolved: %s exclude=%s", sorted(outputs), sorted(exclude))
         batch_size = _int(parameters.get("spacy_batch_size"), 32)
         use_existing_sentences = _bool(parameters.get("use_existing_sentences"))
         use_existing_tokens = _bool(parameters.get("use_existing_tokens"))
+        logger.info(
+            "spaCy input resolution: use_existing_sentences=%s use_existing_tokens=%s batch_size=%d",
+            use_existing_sentences,
+            use_existing_tokens,
+            batch_size,
+        )
         sentence_annotations = (
             _input_annotations(doc, SENTENCE_TYPE) if use_existing_sentences else []
         )
         token_annotations = _input_annotations(doc, TOKEN_TYPE) if use_existing_tokens else []
+        logger.info(
+            "spaCy input annotations resolved: sentences=%d tokens=%d",
+            len(sentence_annotations),
+            len(token_annotations),
+        )
         emit_sentences = not sentence_annotations
         windows = _windows(
             text,
             sentence_annotations,
             token_annotations,
         )
+        logger.info("spaCy windows built: %d windows emit_sentences=%s", len(windows), emit_sentences)
         await telemetry.trace(
             "spaCy process request configured",
             model=model_name,
@@ -566,7 +607,9 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
             input_tokens=len(token_annotations),
             emit_sentences=emit_sentences,
         )
+        logger.info("spaCy loading model: %s", model_name)
         nlp = _load_spacy(model_name, tuple(sorted(exclude)))
+        logger.info("spaCy model loaded successfully: %s", model_name)
         model_raw = getattr(nlp, "meta", {}) or {}
         model_info = {
             "name": str(model_raw.get("name", model_name)),
@@ -575,8 +618,11 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
             "spacy_version": str(model_raw.get("spacy_version", "")),
             "spacy_git_version": str(model_raw.get("spacy_git_version", "")),
         }
+        logger.debug("spaCy model meta: %s", model_info)
         inputs = _doc_inputs(nlp, windows)
-        spacy_docs = nlp.pipe(inputs, batch_size=batch_size)
+        logger.info("spaCy processing %d input docs with batch_size=%d", len(inputs), batch_size)
+        spacy_docs = list(nlp.pipe(inputs, batch_size=batch_size))
+        logger.info("spaCy pipeline completed: %d docs processed", len(spacy_docs))
         spacy_version = _spacy_version()
         meta = {
             "name": self.config.descriptor.name,
@@ -588,6 +634,7 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
             "modelSpacyVersion": model_info["spacy_version"],
             "modelSpacyGitVersion": model_info["spacy_git_version"],
         }
+        logger.info("spaCy building annotations for %d windows", len(windows))
         annotations, _ = _build_window_annotations(
             spacy_docs,
             windows,
@@ -599,7 +646,9 @@ class SpacyAnnotator(DuuiAnnotator[V1RequestEnvelope, DuuiResult]):
         for annotation in annotations:
             counts[annotation.type] = counts.get(annotation.type, 0) + 1
         annotation_count = len(annotations)
+        logger.info("spaCy annotations built: total=%d breakdown=%s", annotation_count, counts)
         elapsed_ms = int((time() - started) * 1000)
+        logger.info("spaCy process() yielding result: %d annotations in %d ms", annotation_count, elapsed_ms)
         await telemetry.count("spacy_annotations", annotation_count, model=model_name)
         for annotation_type, count in counts.items():
             await telemetry.count(

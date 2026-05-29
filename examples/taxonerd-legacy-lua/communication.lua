@@ -79,11 +79,13 @@ function deserialize(inputCas, inputStream)
     local results = json.decode(inputString)
     -- Add modification annotation
     local modification_meta = results["modification_meta"]
-    local modification_anno = luajava.newInstance("org.texttechnologylab.annotation.DocumentModification", inputCas)
-    modification_anno:setUser(modification_meta["user"])
-    modification_anno:setTimestamp(modification_meta["timestamp"])
-    modification_anno:setComment(modification_meta["comment"])
-    modification_anno:addToIndexes()
+    if modification_meta ~= nil then
+        local modification_anno = luajava.newInstance("org.texttechnologylab.annotation.DocumentModification", inputCas)
+        modification_anno:setUser(modification_meta["user"])
+        modification_anno:setTimestamp(modification_meta["timestamp"])
+        modification_anno:setComment(modification_meta["comment"])
+        modification_anno:addToIndexes()
+    end
 
     -- Get meta data, this is the same for every annotation
     local meta = results["meta"]
@@ -94,49 +96,55 @@ function deserialize(inputCas, inputStream)
         -- Note: spaCy will still run the full pipeline, and all results are based on these results
 
     -- Add taxons
-    for i, tax in ipairs(results["taxons"]) do
-        if tax["write_token"] then
-            local taxon_anno = luajava.newInstance("org.texttechnologylab.annotation.type.Taxon", inputCas)
-            taxon_anno:setBegin(tax["begin"])
-            taxon_anno:setEnd(tax["end"])
-            taxon_anno:setValue(tax["text"])
-            taxon_anno:addToIndexes()
+    local taxons = results["taxons"]
+    if taxons ~= nil then
+        for i, tax in ipairs(taxons) do
+            if tax["write_token"] then
+                local taxon_anno = luajava.newInstance("org.texttechnologylab.annotation.type.Taxon", inputCas)
+                taxon_anno:setBegin(tax["begin"])
+                taxon_anno:setEnd(tax["end"])
+                taxon_anno:setValue(tax["text"])
+                taxon_anno:addToIndexes()
 
-            -- Create meta data for this taxon
-            local meta_anno = luajava.newInstance("org.texttechnologylab.annotation.AnnotatorMetaData", inputCas)
-            meta_anno:setReference(taxon_anno)
-            meta_anno:setName(meta["name"])
-            meta_anno:setVersion(meta["version"])
-            meta_anno:setModelName(meta["modelName"])
-            meta_anno:setModelVersion(meta["modelVersion"])
-            meta_anno:addToIndexes()
+                -- Create meta data for this taxon
+                local meta_anno = luajava.newInstance("org.texttechnologylab.annotation.AnnotatorMetaData", inputCas)
+                meta_anno:setReference(taxon_anno)
+                meta_anno:setName(meta["name"])
+                meta_anno:setVersion(meta["version"])
+                meta_anno:setModelName(meta["modelName"])
+                meta_anno:setModelVersion(meta["modelVersion"])
+                meta_anno:addToIndexes()
 
-            -- Add annotation comment for this taxon
-            local anno_comment = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
-            anno_comment:setReference(taxon_anno)
-            anno_comment:setKey("link")
-            anno_comment:setValue(tax["link"][1])
-            anno_comment:addToIndexes()
+                -- Add annotation comment for this taxon
+                local tax_link = tax["link"]
+                if tax_link ~= nil then
+                    local anno_comment = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
+                    anno_comment:setReference(taxon_anno)
+                    anno_comment:setKey("link")
+                    anno_comment:setValue(tax_link[1])
+                    anno_comment:addToIndexes()
 
-            local anno_comment_1 = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
-            anno_comment_1:setReference(taxon_anno)
-            anno_comment_1:setKey("identified_as")
-            anno_comment_1:setValue(tax["link"][2])
-            anno_comment_1:addToIndexes()
+                    local anno_comment_1 = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
+                    anno_comment_1:setReference(taxon_anno)
+                    anno_comment_1:setKey("identified_as")
+                    anno_comment_1:setValue(tax_link[2])
+                    anno_comment_1:addToIndexes()
 
-            local anno_comment_2 = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
-            anno_comment_2:setReference(taxon_anno)
-            anno_comment_2:setKey("similarity")
-            anno_comment_2:setValue(tax["link"][3])
-            anno_comment_2:addToIndexes()
+                    local anno_comment_2 = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
+                    anno_comment_2:setReference(taxon_anno)
+                    anno_comment_2:setKey("similarity")
+                    anno_comment_2:setValue(tax_link[3])
+                    anno_comment_2:addToIndexes()
+                end
 
-            local anno_comment_3 = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
-            anno_comment_3:setReference(taxon_anno)
-            anno_comment_3:setKey("unknown")
-            anno_comment_3:setValue(tax["unknown"]) --LIVB
-            anno_comment_3:addToIndexes()
+                local anno_comment_3 = luajava.newInstance("org.texttechnologylab.annotation.AnnotationComment", inputCas)
+                anno_comment_3:setReference(taxon_anno)
+                anno_comment_3:setKey("unknown")
+                anno_comment_3:setValue(tax["unknown"]) --LIVB
+                anno_comment_3:addToIndexes()
+            end
+
         end
-
     end
 
 end
