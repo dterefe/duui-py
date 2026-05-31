@@ -10,9 +10,9 @@ COPY --from=backend /app/config.toml /app/config.toml
 COPY --from=backend /app/resources /app/resources
 
 RUN pip install --no-cache-dir -e /app \
-    && pip install --no-cache-dir -r /app/examples/gazetteer-msgpack-lua/requirements.txt
+    && pip install --no-cache-dir -r /app/examples/gazetteer-async/requirements.txt
 
-WORKDIR /app/examples/gazetteer-msgpack-lua
+WORKDIR /app/examples/gazetteer-async
 
 EXPOSE 9714
 

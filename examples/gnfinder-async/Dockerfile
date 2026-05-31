@@ -9,9 +9,9 @@ COPY --from=gnfinder-backend /bin/gnfinder /usr/local/bin/gnfinder
 COPY . /app
 
 RUN pip install --no-cache-dir -e /app \
-    && pip install --no-cache-dir -r /app/examples/gnfinder-msgpack-lua/requirements.txt
+    && pip install --no-cache-dir -r /app/examples/gnfinder-async/requirements.txt
 
-WORKDIR /app/examples/gnfinder-msgpack-lua
+WORKDIR /app/examples/gnfinder-async
 
 EXPOSE 9714
 

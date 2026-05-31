@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir -e /app \
-    && pip install --no-cache-dir -r /app/examples/taxonerd-msgpack-lua/requirements.txt \
+    && pip install --no-cache-dir -r /app/examples/taxonerd-async/requirements.txt \
     && pip install --no-cache-dir \
        "scikit-learn>=1.5.0" \
         "scipy==1.10.1" \
@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir -e /app \
 RUN pip install --no-cache-dir https://github.com/nleguillarme/taxonerd/releases/download/v1.5.4/en_ner_eco_md-1.1.0.tar.gz \
     && pip install --no-cache-dir https://github.com/nleguillarme/taxonerd/releases/download/v1.5.4/en_ner_eco_md_weak-1.1.0.tar.gz
 
-WORKDIR /app/examples/taxonerd-msgpack-lua
+WORKDIR /app/examples/taxonerd-async
 
 EXPOSE 9714
 
