@@ -2,6 +2,8 @@ FROM python:3.10-slim
 
 WORKDIR /app
 
+ENV LD_LIBRARY_PATH=/usr/local/lib/python3.10/site-packages/nvidia/cu13/lib:${LD_LIBRARY_PATH}
+
 COPY . /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -22,6 +24,7 @@ RUN pip install --no-cache-dir -e /app \
         "nmslib>=1.7.3.6" \
         "textract>=1.6.5" \
         "torch>=2.0.0" \
+        "cupy-cuda13x>=13.6.0" \
     && pip install --no-cache-dir --no-deps "scispacy==0.5.4" \
     && pip install --no-cache-dir --no-deps git+https://github.com/abrami/taxonerd
 

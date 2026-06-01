@@ -1781,7 +1781,26 @@ function deserialize(inputCas, inputStream)
         elseif chunk.type == CHUNK_DIRECT_MULTI_BATCH then
             apply_direct_multi_batch(inputCas, cas, ts, chunk.payload)
         elseif chunk.type == CHUNK_ERROR then
-            error("received ERROR chunk")
+            local message = "received ERROR chunk"
+            if chunk.payload ~= nil then
+                local ok, decoded = pcall(function()
+                    local u = MessagePack:newDefaultUnpacker(chunk.payload)
+                    local size = u:unpackMapHeader()
+                    local parts = {{}}
+                    for _ = 1, size do
+                        local k = u:unpackString()
+                        if k == "message" or k == "title" or k == "status" then
+                            parts[#parts + 1] = tostring(k) .. "=" .. tostring(unpack_value(u))
+                        else
+                            u:skipValue()
+                        end
+                    end
+                    u:close()
+                    return table.concat(parts, "; ")
+                end)
+                if ok and decoded ~= nil and #decoded > 0 then message = message .. ": " .. decoded end
+            end
+            error(message)
         elseif chunk.type == CHUNK_END then
             for i = 1, #pending_refs do
                 local p = pending_refs[i]
