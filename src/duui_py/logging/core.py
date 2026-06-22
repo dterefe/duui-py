@@ -33,9 +33,11 @@ class LogLevel(str, Enum):
     TRACE = "TRACE"
     DEBUG = "DEBUG"
     INFO = "INFO"
-    WARNING = "WARNING"
+    WARN = "WARN"
+    WARNING = "WARN"
     ERROR = "ERROR"
-    CRITICAL = "CRITICAL"
+    FATAL = "FATAL"
+    CRITICAL = "FATAL"
 
 
 class Event(BaseModel):
@@ -153,7 +155,7 @@ class OTLPSink(EventSink):
             request = urllib.request.Request(
                 self.endpoint,
                 data=payload,
-                headers={"Content-Type": "application/json", **self.headers},
+                headers=self.headers,
                 method="POST",
             )
             with urllib.request.urlopen(
@@ -178,6 +180,7 @@ class EventLogger:
         self.annotator_descriptor = annotator_descriptor
         self._queue: Optional[asyncio.Queue] = None
         self._worker_task: Optional[asyncio.Task] = None
+        self._dropped_events = 0
 
     def has_active_sinks(self) -> bool:
         if not self.sinks:
@@ -234,22 +237,23 @@ class EventLogger:
             except Exception as e:
                 print(f"Error in sink {sink.__class__.__name__}: {e}")
 
-    async def _enqueue_event(self, event: AnyEvent) -> None:
+    def _enqueue_event(self, event: AnyEvent) -> None:
         """Enqueue an event for async processing."""
+        if not self.has_active_sinks():
+            return
         if self._queue is None:
-            # If not started, send synchronously
-            await self._send_event(event)
-        else:
+            self._dropped_events += 1
+            return
+        try:
+            self._queue.put_nowait(event)
+        except asyncio.QueueFull:
             try:
+                self._queue.get_nowait()
+                self._queue.task_done()
                 self._queue.put_nowait(event)
-            except asyncio.QueueFull:
-                # Drop oldest event to make room
-                try:
-                    self._queue.get_nowait()
-                    self._queue.task_done()
-                    self._queue.put_nowait(event)
-                except asyncio.QueueEmpty:
-                    pass  # Should not happen
+                self._dropped_events += 1
+            except asyncio.QueueEmpty:
+                self._dropped_events += 1
 
     def _build_event_context(self) -> Dict[str, str]:
         """Build context from default context and current event context."""
@@ -286,12 +290,15 @@ class EventLogger:
     def _scope(self) -> dict[str, str]:
         return {"name": "duui-py", "version": "0.1.0"}
 
-    async def emit(self, event: AnyEvent) -> None:
-        if not self.has_active_sinks():
-            return
-        await self._enqueue_event(event)
+    def _log_body(self, message: str, attributes: Dict[str, Any]) -> str:
+        if not attributes:
+            return message
+        return f"{message} {json.dumps(_jsonable(attributes), sort_keys=True, separators=(',', ':'))}"
 
-    async def log(
+    def emit(self, event: AnyEvent) -> None:
+        self._enqueue_event(event)
+
+    def log(
         self,
         level: LogLevel,
         message: str,
@@ -304,39 +311,93 @@ class EventLogger:
         event = LogEvent(
             severity_text=level.value,
             severity_number=_severity_number(level),
-            body=message,
-            attributes={**self._build_event_context(), **attributes},
+            body=self._log_body(message, attributes),
+            attributes=self._build_event_context(),
             scope=self._scope(),
             trace_id=trace_id,
             span_id=span_id,
         )
-        await self._enqueue_event(event)
+        self._enqueue_event(event)
 
-    async def debug(self, message: str, **attributes: Any) -> None:
+    def debug(self, message: str, **attributes: Any) -> None:
         """Log a debug message."""
-        await self.log(LogLevel.DEBUG, message, **attributes)
+        self.log(LogLevel.DEBUG, message, **attributes)
 
-    async def trace(self, message: str, **attributes: Any) -> None:
+    def trace(self, message: str, **attributes: Any) -> None:
         """Log a trace message."""
-        await self.log(LogLevel.TRACE, message, **attributes)
+        self.log(LogLevel.TRACE, message, **attributes)
 
-    async def info(self, message: str, **attributes: Any) -> None:
+    def info(self, message: str, **attributes: Any) -> None:
         """Log an info message."""
-        await self.log(LogLevel.INFO, message, **attributes)
+        self.log(LogLevel.INFO, message, **attributes)
 
-    async def warning(self, message: str, **attributes: Any) -> None:
+    def warning(self, message: str, **attributes: Any) -> None:
         """Log a warning message."""
-        await self.log(LogLevel.WARNING, message, **attributes)
+        self.warn(message, **attributes)
 
-    async def error(self, message: str, **attributes: Any) -> None:
+    def warn(self, message: str, **attributes: Any) -> None:
+        """Log a warning message."""
+        self.log(LogLevel.WARN, message, **attributes)
+
+    def error(self, message: str, **attributes: Any) -> None:
         """Log an error message."""
-        await self.log(LogLevel.ERROR, message, **attributes)
+        self.log(LogLevel.ERROR, message, **attributes)
 
-    async def critical(self, message: str, **attributes: Any) -> None:
+    def critical(self, message: str, **attributes: Any) -> None:
         """Log a critical message."""
-        await self.log(LogLevel.CRITICAL, message, **attributes)
+        self.fatal(message, **attributes)
 
-    async def metric(
+    def fatal(self, message: str, **attributes: Any) -> None:
+        """Log a fatal message."""
+        self.log(LogLevel.FATAL, message, **attributes)
+
+    def trace_backend_operation(
+        self,
+        annotator: str,
+        operation: str,
+        **telemetry: Any,
+    ) -> None:
+        self.trace(
+            "DUUI annotator backend operation",
+            annotator=annotator,
+            operation=operation,
+            **telemetry,
+        )
+
+    def trace_annotation_result(
+        self,
+        annotator: str,
+        annotations: Any,
+        *,
+        counts: Dict[str, Any] | None = None,
+        **metadata: Any,
+    ) -> None:
+        self.trace(
+            "DUUI annotation results",
+            annotator=annotator,
+            annotation_count=_count_items(annotations),
+            annotation_counts=counts or {},
+            annotations=_jsonable(annotations),
+            **metadata,
+        )
+
+    def debug_annotation_count(
+        self,
+        annotator: str,
+        count: int,
+        *,
+        counts: Dict[str, Any] | None = None,
+        **metadata: Any,
+    ) -> None:
+        self.debug(
+            "DUUI annotation result count",
+            annotator=annotator,
+            annotation_count=count,
+            annotation_counts=counts or {},
+            **metadata,
+        )
+
+    def metric(
         self,
         category: str,
         name: str,
@@ -371,9 +432,9 @@ class EventLogger:
             trace_id=trace_id,
             span_id=span_id,
         )
-        await self._enqueue_event(event)
+        self._enqueue_event(event)
 
-    async def histogram(
+    def histogram(
         self,
         category: str,
         name: str,
@@ -405,9 +466,9 @@ class EventLogger:
             trace_id=trace_id,
             span_id=span_id,
         )
-        await self._enqueue_event(event)
+        self._enqueue_event(event)
 
-    async def error_event(
+    def error_event(
         self,
         error_type: str,
         message: str,
@@ -432,9 +493,9 @@ class EventLogger:
             trace_id=trace_id,
             span_id=span_id,
         )
-        await self._enqueue_event(event)
+        self._enqueue_event(event)
 
-    async def span(
+    def span(
         self,
         *,
         name: str,
@@ -446,7 +507,7 @@ class EventLogger:
         if not self.has_active_sinks():
             return
         trace_id, span_id = self._trace_context()
-        await self._enqueue_event(
+        self._enqueue_event(
             SpanEvent(
                 name=name,
                 start_time_unix_nano=start_time_unix_nano,
@@ -459,13 +520,13 @@ class EventLogger:
             )
         )
 
-    async def summary(
+    def summary(
         self, *, name: str, attributes: Optional[Dict[str, Any]] = None
     ) -> None:
         if not self.has_active_sinks():
             return
         trace_id, span_id = self._trace_context()
-        await self._enqueue_event(
+        self._enqueue_event(
             SummaryEvent(
                 name=name,
                 attributes={**self._build_event_context(), **(attributes or {})},
@@ -475,16 +536,121 @@ class EventLogger:
             )
         )
 
+    def lifecycle(
+        self,
+        event: str,
+        *,
+        status: str | None = None,
+        phase_gid: str | None = None,
+        domain: str | None = None,
+        state: str | None = None,
+        duration_ms: int | float | None = None,
+        resource: Dict[str, str] | None = None,
+        failure: BaseException | None = None,
+        **attributes: Any,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "duui.phase.event": event,
+            **attributes,
+        }
+        if status is not None:
+            payload["duui.phase.status"] = status
+        if phase_gid is not None:
+            payload["duui.phase.gid"] = phase_gid
+        if domain is not None:
+            payload["duui.phase.domain"] = domain
+        if state is not None:
+            payload["duui.phase.state"] = state
+        if duration_ms is not None:
+            payload["duui.phase.duration.ms"] = duration_ms
+        if failure is not None:
+            payload["duui.failure.type"] = type(failure).__name__
+            payload["duui.failure.message"] = str(failure)
+        self.event(
+            name=f"duui.phase.{event.lower()}",
+            kind="lifecycle",
+            severity=LogLevel.ERROR if failure is not None else LogLevel.INFO,
+            message=f"DUUI phase {event.lower()}" + (f" {status}" if status else ""),
+            resource=resource,
+            **payload,
+        )
+
+    def event(
+        self,
+        name: str,
+        *,
+        kind: str = "log",
+        severity: LogLevel | str = LogLevel.INFO,
+        message: str | None = None,
+        resource: Dict[str, str] | None = None,
+        scope: Dict[str, str] | None = None,
+        **attributes: Any,
+    ) -> None:
+        level = severity if isinstance(severity, LogLevel) else LogLevel[str(severity).upper()]
+        trace_id, span_id = self._trace_context()
+        event = LogEvent(
+            severity_text=level.value,
+            severity_number=_severity_number(level),
+            body=message or name,
+            attributes={
+                **self._build_event_context(),
+                "event.name": name,
+                "event.kind": kind,
+                **_jsonable(attributes),
+            },
+            resource={**host_resource_attributes(), **(resource or {})},
+            scope={**self._scope(), **(scope or {})},
+            trace_id=trace_id,
+            span_id=span_id,
+        )
+        self._enqueue_event(event)
+
 
 def _severity_number(level: LogLevel) -> int:
     return {
         LogLevel.TRACE: 1,
         LogLevel.DEBUG: 5,
         LogLevel.INFO: 9,
-        LogLevel.WARNING: 13,
+        LogLevel.WARN: 13,
         LogLevel.ERROR: 17,
-        LogLevel.CRITICAL: 21,
+        LogLevel.FATAL: 21,
     }[level]
+
+
+def _jsonable(value: Any) -> Any:
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            out[str(key)] = _jsonable(item)
+        return out
+    if isinstance(value, list):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, tuple):
+        return [_jsonable(item) for item in value]
+    if isinstance(value, set):
+        return [_jsonable(item) for item in sorted(value, key=str)]
+    if isinstance(value, bytes):
+        return {"bytes": len(value)}
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if hasattr(value, "model_dump"):
+        try:
+            return value.model_dump(mode="json")
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _count_items(value: Any) -> int:
+    if value is None:
+        return 0
+    if isinstance(value, dict):
+        return len(value)
+    if isinstance(value, (list, tuple, set)):
+        return len(value)
+    return 1
 
 
 # Global logger instance
@@ -492,21 +658,19 @@ _logger_instance: Optional[EventLogger] = None
 _logger_context: ContextVar[Optional[EventLogger]] = ContextVar(
     "event_logger", default=None
 )
+_noop_logger = EventLogger()
 
 
-def get_event_logger() -> EventLogger:
-    """Get the global event logger instance."""
-    global _logger_instance
-    if _logger_instance is None:
-        raise RuntimeError(
-            "Event logger not configured. Call configure_logger() first."
-        )
-    return _logger_instance
+def logger() -> EventLogger:
+    """Return the current DUUI-Py telemetry logger.
 
-
-def get_configured_event_logger() -> Optional[EventLogger]:
-    """Return the configured event logger for adapter-owned telemetry plumbing."""
-    return _logger_instance
+    This is the public logging and telemetry entrypoint. Calls enqueue events
+    without awaiting sink I/O.
+    """
+    current = _logger_context.get()
+    if current is not None:
+        return current
+    return _logger_instance or _noop_logger
 
 
 def configure_logger(

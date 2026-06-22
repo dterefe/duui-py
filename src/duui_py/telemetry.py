@@ -1,16 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import functools
-import inspect
 import json
 import os
 import socket
 import time
-from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from collections.abc import AsyncIterator
-from typing import Any, Awaitable, Callable, Literal, TypeVar, ParamSpec, cast
+from typing import Any, Literal
 from uuid import uuid4
 
 from fastapi import HTTPException, Request
@@ -23,10 +19,6 @@ try:
 except ImportError:
     PSUTIL_AVAILABLE = False
     psutil = None  # type: ignore[assignment]
-
-P = ParamSpec("P")
-R = TypeVar("R")
-
 
 TELEMETRY_PROTOCOL_VERSION = "duui-otel-0.1"
 DEFAULT_HISTOGRAM_BUCKETS_MS = (
@@ -94,27 +86,6 @@ def host_resource_attributes() -> dict[str, str]:
             pass
         _HOST_RESOURCE_ATTRIBUTES = attrs
     return dict(_HOST_RESOURCE_ATTRIBUTES)
-
-
-def emit_background(awaitable: Awaitable[Any]) -> None:
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        close = getattr(awaitable, "close", None)
-        if callable(close):
-            close()
-        return
-    task = loop.create_task(awaitable)
-    task.add_done_callback(_consume_background_exception)
-
-
-def _consume_background_exception(task: asyncio.Task[Any]) -> None:
-    try:
-        task.result()
-    except asyncio.CancelledError:
-        return
-    except Exception as exc:
-        print(f"Error emitting telemetry event: {exc}")
 
 
 def parse_traceparent(value: str | None) -> tuple[str | None, str | None]:
@@ -833,39 +804,35 @@ class TelemetryRecorder:
     async def finish(
         self, *, status_code: int = 200, error: BaseException | None = None
     ) -> None:
-        from duui_py.logging.core import get_configured_event_logger
+        from duui_py.logging.core import logger
 
-        logger = get_configured_event_logger()
-        has_active_sinks = logger is not None and logger.has_active_sinks()
+        log = logger()
+        has_active_sinks = log.has_active_sinks()
         resource_samples = await self.sampler.stop()
-        if not has_active_sinks or logger is None:
+        if not has_active_sinks:
             return
         duration_ms = (time.perf_counter() - self.started_monotonic) * 1000.0
         scopes = ScopeRegistry.scopes(self.context)
         is_error = error is not None or status_code >= 400
 
         for sample in resource_samples:
-            emit_background(
-                logger.metric(
-                    sample["category"],
-                    sample["name"],
-                    sample["value"],
-                    sample["unit"],
-                    sample["interval_ms"],
-                    {**sample["attributes"], **self.context.otel_attributes()},
-                )
+            log.metric(
+                sample["category"],
+                sample["name"],
+                sample["value"],
+                sample["unit"],
+                sample["interval_ms"],
+                {**sample["attributes"], **self.context.otel_attributes()},
             )
 
         for category, name, value, unit, interval_ms, attrs in self.extra_metrics:
-            emit_background(
-                logger.metric(
-                    category,
-                    name,
-                    value,
-                    unit,
-                    interval_ms,
-                    {**attrs, **self.context.otel_attributes()},
-                )
+            log.metric(
+                category,
+                name,
+                value,
+                unit,
+                interval_ms,
+                {**attrs, **self.context.otel_attributes()},
             )
 
         aggregates = await aggregation_store.record(
@@ -879,259 +846,73 @@ class TelemetryRecorder:
                 "status_code": str(status_code),
             }
             if "duration" in self.context.telemetry.stats:
-                emit_background(
-                    logger.metric(
-                        "request",
-                        "duui.request.duration",
-                        duration_ms,
-                        "milliseconds",
-                        int(duration_ms),
-                        tags,
-                    )
+                log.metric(
+                    "request",
+                    "duui.request.duration",
+                    duration_ms,
+                    "milliseconds",
+                    0,
+                    tags,
                 )
             if "histogram" in self.context.telemetry.stats:
-                emit_background(
-                    logger.histogram(
-                        "request",
-                        "duui.request.duration.histogram",
-                        aggregate.histogram.snapshot(),
-                        "milliseconds",
-                        tags,
-                    )
+                log.histogram(
+                    "request",
+                    "duui.request.duration.histogram",
+                    aggregate.histogram.snapshot(),
+                    "milliseconds",
+                    tags,
                 )
             if "throughput" in self.context.telemetry.stats:
-                emit_background(
-                    logger.metric(
-                        "request",
-                        "duui.request.throughput",
-                        aggregate.count / elapsed,
-                        "requests_per_second",
-                        0,
-                        tags,
-                    )
+                log.metric(
+                    "request",
+                    "duui.request.throughput",
+                    aggregate.count / elapsed,
+                    "requests_per_second",
+                    0,
+                    tags,
                 )
-                emit_background(
-                    logger.metric(
+                log.metric(
+                    "request",
+                    "duui.request.count",
+                    float(aggregate.count),
+                    "count",
+                    0,
+                    tags,
+                )
+                if aggregate.error_count:
+                    log.metric(
                         "request",
-                        "duui.request.count",
-                        float(aggregate.count),
+                        "duui.request.errors",
+                        float(aggregate.error_count),
                         "count",
                         0,
                         tags,
                     )
-                )
-                if aggregate.error_count:
-                    emit_background(
-                        logger.metric(
-                            "request",
-                            "duui.request.errors",
-                            float(aggregate.error_count),
-                            "count",
-                            0,
-                            tags,
-                        )
-                    )
 
-        emit_background(
-            logger.span(
-                name=self.operation,
-                start_time_unix_nano=self.started_ns,
-                end_time_unix_nano=now_unix_nano(),
-                status_code=status_code,
-                attributes={
-                    **self.context.otel_attributes(),
-                    **{
-                        f"duui.phase.{key}_ms": str(int(value))
-                        for key, value in self.phase_ms.items()
-                    },
-                    **self.extra_attributes,
+        log.span(
+            name=self.operation,
+            start_time_unix_nano=self.started_ns,
+            end_time_unix_nano=now_unix_nano(),
+            status_code=status_code,
+            attributes={
+                **self.context.otel_attributes(),
+                **{
+                    f"duui.phase.{key}_ms": str(int(value))
+                    for key, value in self.phase_ms.items()
                 },
-            )
+                **self.extra_attributes,
+            },
         )
-        emit_background(
-            logger.summary(
-                name="duui.request.summary",
-                attributes={
-                    **self.context.otel_attributes(),
-                    "status_code": str(status_code),
-                    "duration_ms": str(int(duration_ms)),
-                    **{
-                        f"{key}_ms": str(int(value))
-                        for key, value in self.phase_ms.items()
-                    },
-                    **self.extra_attributes,
+        log.summary(
+            name="duui.request.summary",
+            attributes={
+                **self.context.otel_attributes(),
+                "status_code": str(status_code),
+                "duration_ms": str(int(duration_ms)),
+                **{
+                    f"{key}_ms": str(int(value))
+                    for key, value in self.phase_ms.items()
                 },
-            )
+                **self.extra_attributes,
+            },
         )
-
-
-class Telemetry:
-    async def log(self, level: str, message: str, **attributes: Any) -> None:
-        from duui_py.logging.core import LogLevel, get_configured_event_logger
-
-        logger = get_configured_event_logger()
-        if logger is None or not logger.has_active_sinks():
-            return
-        normalized = LogLevel[level.upper()]
-        emit_background(logger.log(normalized, message, **attributes))
-
-    async def debug(self, message: str, **attributes: Any) -> None:
-        await self.log("DEBUG", message, **attributes)
-
-    async def trace(self, message: str, **attributes: Any) -> None:
-        await self.log("TRACE", message, **attributes)
-
-    async def info(self, message: str, **attributes: Any) -> None:
-        await self.log("INFO", message, **attributes)
-
-    async def warning(self, message: str, **attributes: Any) -> None:
-        await self.log("WARNING", message, **attributes)
-
-    async def error(self, message: str, **attributes: Any) -> None:
-        await self.log("ERROR", message, **attributes)
-
-    async def critical(self, message: str, **attributes: Any) -> None:
-        await self.log("CRITICAL", message, **attributes)
-
-    async def count(self, name: str, value: float = 1, **attributes: str) -> None:
-        await self.metric("processing", name, value, "count", **attributes)
-
-    async def gauge(
-        self, name: str, value: float, unit: str = "value", **attributes: str
-    ) -> None:
-        await self.metric("processing", name, value, unit, **attributes)
-
-    async def timing(
-        self, name: str, elapsed_ms: int | float, **attributes: str
-    ) -> None:
-        await self.metric(
-            "processing",
-            name,
-            float(elapsed_ms),
-            "milliseconds",
-            interval_ms=int(elapsed_ms),
-            **attributes,
-        )
-
-    async def metric(
-        self,
-        category: str,
-        name: str,
-        value: float,
-        unit: str,
-        *,
-        interval_ms: int = 0,
-        **attributes: str,
-    ) -> None:
-        from duui_py.logging.core import get_configured_event_logger
-
-        logger = get_configured_event_logger()
-        if logger is None or not logger.has_active_sinks():
-            return
-        emit_background(
-            logger.metric(category, name, value, unit, interval_ms, attributes)
-        )
-
-    async def histogram(
-        self,
-        category: str,
-        name: str,
-        histogram: dict[str, Any],
-        unit: str = "milliseconds",
-        **attributes: str,
-    ) -> None:
-        from duui_py.logging.core import get_configured_event_logger
-
-        logger = get_configured_event_logger()
-        if logger is None or not logger.has_active_sinks():
-            return
-        emit_background(
-            logger.histogram(category, name, histogram, unit, attributes)
-        )
-
-    @asynccontextmanager
-    async def timer(self, name: str, **attributes: str) -> AsyncIterator[None]:
-        started = time.perf_counter()
-        try:
-            yield
-        finally:
-            elapsed_ms = int((time.perf_counter() - started) * 1000)
-            await self.timing(name, elapsed_ms, **attributes)
-
-    def timed(
-        self,
-        name: str,
-        *,
-        category: str = "processing",
-        unit: str = "milliseconds",
-        **attributes: str,
-    ) -> Callable[[Callable[P, R]], Callable[P, R]]:
-        def decorate(func: Callable[P, R]) -> Callable[P, R]:
-            if inspect.isasyncgenfunction(func):
-                @functools.wraps(func)
-                async def async_iter_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
-                    started = time.perf_counter()
-                    try:
-                        async for value in cast(Any, func)(*args, **kwargs):
-                            yield value
-                    finally:
-                        elapsed_ms = (time.perf_counter() - started) * 1000.0
-                        await self.metric(
-                            category,
-                            name,
-                            elapsed_ms,
-                            unit,
-                            interval_ms=int(elapsed_ms),
-                            **attributes,
-                        )
-
-                return cast(Callable[P, R], async_iter_wrapper)
-
-            if asyncio.iscoroutinefunction(func):
-                @functools.wraps(func)
-                async def async_wrapper(*args: P.args, **kwargs: P.kwargs) -> Any:
-                    started = time.perf_counter()
-                    try:
-                        return await cast(Any, func)(*args, **kwargs)
-                    finally:
-                        elapsed_ms = (time.perf_counter() - started) * 1000.0
-                        await self.metric(
-                            category,
-                            name,
-                            elapsed_ms,
-                            unit,
-                            interval_ms=int(elapsed_ms),
-                            **attributes,
-                        )
-
-                return cast(Callable[P, R], async_wrapper)
-
-            @functools.wraps(func)
-            def sync_wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
-                started = time.perf_counter()
-                try:
-                    return func(*args, **kwargs)
-                finally:
-                    elapsed_ms = (time.perf_counter() - started) * 1000.0
-                    try:
-                        loop = asyncio.get_running_loop()
-                    except RuntimeError:
-                        pass
-                    else:
-                        loop.create_task(
-                            self.metric(
-                                category,
-                                name,
-                                elapsed_ms,
-                                unit,
-                                interval_ms=int(elapsed_ms),
-                                **attributes,
-                            )
-                        )
-
-            return sync_wrapper
-
-        return decorate
-
-
-telemetry = Telemetry()

@@ -13,4 +13,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["gnfinder_annotator"]
+py-modules = ["gnfinder_annotator", "gnfinder_legacy_annotator"]

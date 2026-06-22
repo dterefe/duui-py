@@ -61,24 +61,53 @@
           ]
         }
       }
+    },
+    "parameters": {
+      "linking": {
+        "type": "string",
+        "default": "gbif_backbone",
+        "description": "TaxoNERD linker name."
+      },
+      "threshold": {
+        "type": "number",
+        "default": 0.7,
+        "description": "TaxoNERD threshold."
+      },
+      "model": {
+        "type": "string",
+        "default": "en_ner_eco_md",
+        "description": "TaxoNERD model."
+      },
+      "prefer_gpu": {
+        "type": "boolean",
+        "default": false,
+        "description": "Prefer GPU when available for TaxoNERD inference."
+      },
+      "exclude": {
+        "type": "array",
+        "default": [
+          "tagger",
+          "parser",
+          "taxo_abbrev_detector",
+          "taxon_linker",
+          "pysbd_sentencizer"
+        ],
+        "description": "TaxoNERD/spaCy pipeline components to exclude."
+      },
+      "allow_unlinked": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow linker none without returning an error."
+      },
+      "model_name": {
+        "type": "string",
+        "description": "Alias for model."
+      },
+      "linker_name": {
+        "type": "string",
+        "description": "Alias for linking."
+      }
     }
   },
-  "typesystem_xml_path": "TypeSystemTaxoNERD.xml",
-  "parameters_schema": {
-    "linking": {
-      "type": "string",
-      "default": "gbif_backbone",
-      "description": "TaxoNERD linker name."
-    },
-    "threshold": {
-      "type": "number",
-      "default": 0.7,
-      "description": "TaxoNERD threshold."
-    },
-    "model": {
-      "type": "string",
-      "default": "en_ner_eco_md",
-      "description": "TaxoNERD model."
-    }
-  }
+  "typesystem_xml_path": "TypeSystemTaxoNERD.xml"
 }

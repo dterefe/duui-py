@@ -1,12 +1,17 @@
 # spaCy
 
-DUUI V1 text example using Python-native config, generated `MsgPackLuaCodec`, and `AsyncChunkedRequestAdapter`.
+DUUI V1 text example with two comparable implementations:
 
-The annotator uses spaCy when it is installed and falls back to deterministic lightweight token, sentence, lemma, POS, morphology, dependency, and named-entity annotations when spaCy is unavailable.
+- `spacy_legacy_annotator.py` uses the old `duui-uima/duui-spacy`
+  TextImager JSON `serialize` / `deserialize` codec.
+- `spacy_annotator.py` uses generated MsgPack Lua.
+
+The annotators require spaCy and the selected spaCy model to be installed.
 
 ## Files
 
-- `spacy_annotator.py` - annotator implementation and config
+- `spacy_legacy_annotator.py` - old TextImager Lua JSON baseline
+- `spacy_annotator.py` - generated MsgPack Lua implementation
 - `TypeSystemSpacy.xml` - UIMA type system
 - `requirements.txt` - optional example dependencies
 - `Dockerfile` - container image build
@@ -24,15 +29,25 @@ Optional spaCy model:
 python -m spacy download en_core_web_sm
 ```
 
+Transformer analogue for the old DUUI-UIMA spaCy baseline:
+
+```bash
+python -m spacy download de_dep_news_trf
+```
+
 ## Output
 
-The annotator yields existing DKPro model objects:
+The annotators yield only the types declared by `TypeSystemSpacy.xml`:
 
 ```text
 de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence
 de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token
+de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma
 de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS
+de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.morph.MorphologicalFeatures
+de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.Dependency
+de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.ROOT
 de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity
-org.texttechnologylab.annotation.AnnotatorMetaData
+org.texttechnologylab.annotation.SpacyAnnotatorMetaData
 org.texttechnologylab.annotation.DocumentModification
 ```

@@ -13,4 +13,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["taxonerd_annotator"]
+py-modules = ["taxonerd_annotator", "taxonerd_legacy_annotator"]

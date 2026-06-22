@@ -14,7 +14,7 @@ from .core import (
     StreamSink,
     ConsoleSink,
     OTLPSink,
-    get_event_logger,
+    logger,
     configure_logger,
 )
 from .context import (
@@ -51,7 +51,7 @@ __all__ = [
     "StreamSink",
     "ConsoleSink",
     "OTLPSink",
-    "get_event_logger",
+    "logger",
     "configure_logger",
     # Context management
     "EventContext",

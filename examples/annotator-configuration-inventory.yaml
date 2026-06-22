@@ -1,0 +1,721 @@
+version: 1
+generated_for: duui-py example annotator evaluation
+generated_on: 2026-06-10
+scope:
+  directories:
+    - duui-py/examples/gazetteer-async
+    - duui-py/examples/gnfinder-async
+    - duui-py/examples/spacy-async
+    - duui-py/examples/taxonerd-async
+  variants:
+    - legacy_lua_json_baseline
+    - msgpack_lua_async
+  policy:
+    fixed_annotator_worker_defaults: removed_from_example_dockerfiles
+    backend_worker_defaults: omitted_unless_configured
+    model_changes: out_of_scope
+    typesystem_changes: out_of_scope
+    descriptor_exposure: performance_relevant_request_and_backend_knobs_only
+    excluded_from_descriptor:
+      - container_internal_bind_host
+      - container_internal_bind_port
+      - fixed_backend_ping_paths
+      - fixed_output_type_names
+      - mime_validation_policy
+      - telemetry_service_storage_limits
+
+descriptor_runtime_exclusions:
+  container_runtime:
+    source_files:
+      - duui-py/examples/gazetteer-async/Dockerfile
+      - duui-py/examples/gnfinder-async/Dockerfile
+      - duui-py/examples/spacy-async/Dockerfile
+      - duui-py/examples/taxonerd-async/Dockerfile
+    reason: Container bind host/port and image entrypoint wiring are deployment concerns, not annotator performance semantics. The descriptor now exposes only request/backend knobs that change runtime cost or result-query behavior.
+
+descriptor_parameter_surface:
+  source:
+    model: duui-py/src/duui_py/models/config.py
+    endpoints:
+      - /v1/details/input_output
+      - /v1/documentation
+  rule: AnnotatorDescriptor.parameters carries the performance-relevant schema. AnnotatorConfig mirrors legacy root parameters_schema into the descriptor and descriptor.parameters back to parameters_schema when loading older or static configs.
+
+shared_duui_py_descriptor_settings:
+  source_files:
+    - duui-py/examples/gnfinder-async/annotator_config.json
+    - duui-py/examples/spacy-async/annotator_config.json
+    - duui-py/examples/taxonerd-async/annotator_config.json
+  validation:
+    strict_mime_validation:
+      type: boolean
+      current: true
+    strict_input_mime_check:
+      type: boolean
+      current: true
+    strict_output_mime_check:
+      type: boolean
+      current: true
+    strict_sofa_data_type_validation:
+      type: boolean
+      current: true
+    strict_descriptor_mime_pattern_validation:
+      type: boolean
+      current: true
+  limits:
+    request_max_bytes:
+      type: integer_or_null
+      current: null
+    response_max_bytes:
+      type: integer_or_null
+      current: null
+  errors:
+    fail_on_codec_error:
+      type: boolean
+      current: true
+    include_validation_details:
+      type: boolean
+      current: true
+  logging:
+    enabled:
+      type: boolean
+      current: true
+    stream_timeout_minutes:
+      type: number
+      current: 5
+    max_queue_size:
+      type: integer
+      current: 1000
+    metrics_collection_interval_seconds:
+      type: number
+      current: 5
+
+shared_backend_runtime:
+  source_file: duui-py/src/duui_py/utils/backend.py
+  managed_backend:
+    binary_name:
+      type: string
+      configured_per_backend: true
+    args:
+      type: list_string
+      configured_per_backend: true
+    port:
+      type: integer
+      configured_per_backend: true
+    ping_path:
+      type: string
+      configured_per_backend: true
+    startup_timeout:
+      type: number
+      default: 120.0
+    poll_interval:
+      type: number
+      default: 0.25
+    env:
+      type: map_string_string_or_null
+      default: null
+    cwd:
+      type: string_or_null
+      default: null
+    ready_status_codes:
+      type: set_integer
+      default: 200_to_299
+    health_check_interval_seconds:
+      type: number
+      env: DUUI_BACKEND_HEALTH_CHECK_INTERVAL_SECONDS
+      default: 30.0
+    readiness_timeout_seconds:
+      type: number
+      env: DUUI_BACKEND_READINESS_TIMEOUT_SECONDS
+      default: 1.0
+    health_timeout_seconds:
+      type: number
+      env: DUUI_BACKEND_HEALTH_TIMEOUT_SECONDS
+      default: 2.0
+    lifecycle_stop_wait_seconds:
+      type: number
+      env: DUUI_BACKEND_STOP_TIMEOUT_SECONDS
+      default: 5.0
+    lifecycle_kill_wait_seconds:
+      type: number
+      env: DUUI_BACKEND_STOP_TIMEOUT_SECONDS
+      default: 5.0
+    internal_client:
+      max_connections:
+        type: integer
+        env: DUUI_BACKEND_INTERNAL_MAX_CONNECTIONS
+        default: 10
+      max_keepalive_connections:
+        type: integer
+        env: DUUI_BACKEND_INTERNAL_MAX_KEEPALIVE_CONNECTIONS
+        default: 5
+      keepalive_expiry_seconds:
+        type: number
+        env: DUUI_BACKEND_INTERNAL_KEEPALIVE_EXPIRY_SECONDS
+        default: 60.0
+      timeout_seconds:
+        type: number
+        env: DUUI_BACKEND_INTERNAL_TIMEOUT_SECONDS
+        default: 5.0
+      connect_timeout_seconds:
+        type: number
+        env: DUUI_BACKEND_INTERNAL_CONNECT_TIMEOUT_SECONDS
+        default: 2.0
+      http2:
+        type: boolean
+        current: auto_if_h2_installed
+  managed_http_pool:
+    timeout_seconds:
+      type: number
+      default: 120.0
+      configured_per_request_where_supported: true
+    connect_timeout_seconds:
+      type: number
+      env: DUUI_HTTP_CONNECT_TIMEOUT_SECONDS
+      default: 10.0
+    pool_timeout_seconds:
+      type: number
+      env: DUUI_HTTP_POOL_TIMEOUT_SECONDS
+      default: 5.0
+    max_connections:
+      type: integer
+      env: DUUI_HTTP_MAX_CONNECTIONS
+      default: 50
+    max_keepalive_connections:
+      type: integer
+      env: DUUI_HTTP_MAX_KEEPALIVE_CONNECTIONS
+      default: 50
+    keepalive_expiry_seconds:
+      type: number
+      env: DUUI_HTTP_KEEPALIVE_EXPIRY_SECONDS
+      default: 60.0
+    http2:
+      type: boolean
+      current: auto_if_h2_installed
+    headers:
+      explicit_shared_headers:
+        current: none
+      json_payload_encoding:
+        current: delegated_to_httpx_json_parameter
+    retry:
+      default_retries:
+        type: integer
+        env: DUUI_HTTP_RETRIES
+        default: 2
+      backoff_base_seconds:
+        type: number
+        env: DUUI_HTTP_BACKOFF_BASE_SECONDS
+        default: 0.5
+      transient_status_codes:
+        current: [408, 429, 502, 503, 504]
+    health_timeout_seconds:
+      type: number
+      env: DUUI_HTTP_HEALTH_TIMEOUT_SECONDS
+      default: 5.0
+
+annotators:
+  gazetteer:
+    async_msgpack:
+      source_file: duui-py/examples/gazetteer-async/gazetteer_annotator.py
+      codec: msgpack_lua
+      backend:
+        binary:
+          parameter: null
+          env: null
+          resolution_order:
+            - duui-py/examples/gazetteer-async/backend/gazetteer
+            - /app/gazetteer
+        config_path:
+          parameter: null
+          env: null
+          resolution_order:
+            - duui-py/examples/gazetteer-async/backend/config.toml
+            - /app/config.toml
+        address:
+          parameter: gazetteer_address
+          env: GAZETTEER_RS_ADDRESS
+          default: 127.0.0.1
+        port:
+          parameter: gazetteer_backend_port
+          env: GAZETTEER_RS_PORT
+          default: 18001
+        workers:
+          parameter: gazetteer_workers
+          env: GAZETTEER_RS_WORKERS
+          default: omitted
+        limit:
+          parameter: gazetteer_limit
+          env: GAZETTEER_RS_LIMIT
+          default: omitted
+        ping_path:
+          current: /v1/process
+        startup_timeout_seconds:
+          parameter: gazetteer_startup_timeout
+          env: GAZETTEER_RS_STARTUP_TIMEOUT
+          default: 120.0
+        ready_status_codes:
+          current: [405]
+      request_parameters:
+        backend_url:
+          type: string
+          default: null
+          effect: use_remote_backend_instead_of_managed_local_backend
+        timeout:
+          type: number
+          default: 120
+          alias: timeout_seconds
+        max_len:
+          type: integer
+          default: null
+          forwarded_to_backend: true
+        result_selection:
+          type: string
+          default: null
+          forwarded_to_backend: true
+        window_chars:
+          type: integer
+          default: 0
+          effect: split_long_input_for_backend_queries
+        window_overlap:
+          type: integer
+          default: 512
+          effect: overlap_for_windowed_backend_queries
+        backend_concurrency:
+          type: integer
+          default: 4
+          effect: concurrent_window_backend_requests
+      procedure_knobs:
+        preannotation_pass_through:
+          enabled: true
+          trigger_type: org.texttechnologylab.annotation.type.Taxon
+        deduplicate_window_results:
+          enabled: true
+          key_fields: [begin, end, match_strings, match_labels]
+    legacy_lua_json:
+      source_file: duui-py/examples/gazetteer-async/gazetteer_legacy_annotator.py
+      codec: lua_custom_json
+      backend:
+        shared_with_async_msgpack: true
+      request_parameters:
+        max_len:
+          type: integer
+          default: null
+          forwarded_to_backend: true
+        result_selection:
+          type: string
+          default: null
+          forwarded_to_backend: true
+        timeout_seconds:
+          type: number
+          default: 120.0
+      procedure_knobs:
+        retry_count:
+          type: integer
+          env: DUUI_HTTP_RETRIES
+          default: 2
+        pool_timeout_seconds:
+          type: number
+          current: 120.0
+
+  gnfinder:
+    async_msgpack:
+      source_file: duui-py/examples/gnfinder-async/gnfinder_annotator.py
+      codec: msgpack_lua
+      backend:
+        binary:
+          parameter: gnfinder_binary
+          env: GNFINDER_BINARY
+          default: gnfinder
+        port:
+          parameter: gnfinder_backend_port
+          env: GNFINDER_API_PORT
+          default: 18999
+        args:
+          current: ["-p", "${gnfinder_backend_port}"]
+        ping_path:
+          current: /api/v1/ping
+        startup_timeout_seconds:
+          parameter: gnfinder_startup_timeout
+          env: GNFINDER_STARTUP_TIMEOUT
+          default: 20.0
+      request_parameters:
+        lang:
+          type: string
+          default: detect
+          aliases: [language]
+          values_seen: [detect, deu, ger, de, german, eng, en, english]
+        verify:
+          type: boolean
+          default: true
+          aliases: [verification]
+        timeout_seconds:
+          type: number
+          default: 120
+        sources:
+          type: list_integer_or_string
+          default: null
+          forwarded_to_backend: true
+        all_matches:
+          type: boolean
+          default: null
+          backend_field: allMatches
+        unique_names:
+          type: boolean
+          default: null
+          backend_field: uniqueNames
+        ambiguous_uninomials:
+          type: boolean
+          default: null
+          backend_field: ambiguousUninomials
+        no_bayes:
+          type: boolean
+          default: null
+          backend_field: noBayes
+        odds_details:
+          type: boolean
+          default: null
+          backend_field: oddsDetails
+        return_content:
+          type: boolean
+          default: null
+          backend_field: returnContent
+        words_around:
+          type: integer
+          default: null
+          backend_field: wordsAround
+      procedure_knobs:
+        preannotation_pass_through:
+          enabled: true
+          trigger_types:
+            - org.texttechnologylab.annotation.biofid.gnfinder.Taxon
+            - org.texttechnologylab.annotation.biofid.gnfinder.VerifiedTaxon
+        retry_count:
+          type: integer
+          current: 2
+    legacy_lua_json:
+      source_file: duui-py/examples/gnfinder-async/gnfinder_legacy_annotator.py
+      codec: lua_custom_json
+      backend:
+        shared_with_async_msgpack: true
+      request_parameters:
+        language:
+          type: string
+          default: detect
+          values: [eng, ger, deu, detect]
+        ambiguousNames:
+          type: boolean
+          default: false
+        noBayes:
+          type: boolean
+          default: false
+        oddsDetails:
+          type: boolean
+          default: false
+        verification:
+          type: boolean
+          default: true
+        sources:
+          type: list_integer
+          default: [11]
+        allMatches:
+          type: boolean
+          default: false
+        timeout_seconds:
+          type: number
+          default: 120.0
+      procedure_knobs:
+        retry_count:
+          type: integer
+          env: DUUI_HTTP_RETRIES
+          default: 2
+        pool_timeout_seconds:
+          type: number
+          current: 120.0
+
+  spacy:
+    async_msgpack:
+      source_file: duui-py/examples/spacy-async/spacy_annotator.py
+      codec: msgpack_lua
+      model_resolution:
+        explicit_model_parameter: model_name
+        aliases: [spacy_model, single_model]
+        variant_parameter: model_variant
+        variant_aliases: [spacy_model_size]
+        language_parameter: spacy_language
+        language_aliases: [language, lang]
+        variants:
+          trf:
+            de: de_dep_news_trf
+            en: en_core_web_trf
+          sm:
+            de: de_core_news_sm
+            en: en_core_web_sm
+        preload_env: DUUI_SPACY_PRELOAD_MODEL
+        preload_fallback_order:
+          - en_core_web_trf_if_installed
+          - en_core_web_sm
+      request_parameters:
+        model_name:
+          type: string
+          default: en_core_web_trf
+        model_variant:
+          type: string
+          default: trf
+          values: [trf, sm]
+        spacy_language:
+          type: string
+          default: en
+        exclude:
+          type: string_or_list
+          default: []
+          effect: spacy_load_exclude_components
+        spacy_batch_size:
+          type: integer
+          default: 32
+        use_existing_sentences:
+          type: boolean
+          default: false
+        use_existing_tokens:
+          type: boolean
+          default: false
+        spacy_n_process:
+          type: integer
+          default: 0
+          env: SPACY_N_PROCESS
+          effect: nlp_pipe_process_count
+          zero_means: cpu_count_for_cpu_or_1_for_gpu
+        prefer_gpu:
+          type: boolean
+          default: false
+          env_fallbacks:
+            - DUUI_PREFER_GPU
+            - CUDA_VISIBLE_DEVICES
+        disable_pipeline_components:
+          type: boolean
+          default: true
+          effect: disable_components_not_required_by_outputs
+        adaptive_batch_size:
+          type: boolean
+          default: true
+          effect: lower_batch_size_for_longer_texts
+      procedure_knobs:
+        output_set:
+          default:
+            - tokenizer
+            - sentencizer
+            - lemmatizer
+            - tagger
+            - morphologizer
+            - parser
+            - ner
+        pass_through_existing_annotations:
+          enabled: true
+          required_types_by_output:
+            tokenizer: de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token
+            sentencizer: de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence
+            lemmatizer: de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Lemma
+            tagger: de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.pos.POS
+            morphologizer: de.tudarmstadt.ukp.dkpro.core.api.lexmorph.type.morph.MorphologicalFeatures
+            parser:
+              - de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.Dependency
+              - de.tudarmstadt.ukp.dkpro.core.api.syntax.type.dependency.ROOT
+            ner: de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity
+        gpu_memory:
+          pytorch_cuda_alloc_conf_append:
+            env: DUUI_SPACY_CUDA_MAX_SPLIT_SIZE_MB
+            default: max_split_size_mb:128
+          cuda_device:
+            env: DUUI_SPACY_CUDA_DEVICE
+            default: 0
+        model_cache:
+          lru_cache_maxsize: 4
+    legacy_lua_json:
+      source_file: duui-py/examples/spacy-async/spacy_legacy_annotator.py
+      codec: lua_custom_json
+      model_resolution:
+        explicit_model_parameter: model_name
+        variant_parameter: model_variant
+        variant_aliases: [spacy_model_size]
+        default_variant: efficiency
+        variant_alias_mapping:
+          lg: accuracy
+          trf: accuracy
+          sm: efficiency
+        language_mapping:
+          x-unspecified: xx
+        strict_language_check_parameter: strict_language_check
+        variants:
+          efficiency:
+            de: de_core_news_sm
+            en: en_core_web_sm
+            fr: fr_core_news_sm
+          accuracy:
+            de: de_dep_news_trf
+            en: en_core_web_trf
+            fr: fr_dep_news_trf
+          sm:
+            de: de_core_news_sm
+            en: en_core_web_sm
+            fr: fr_core_news_sm
+          trf:
+            de: de_dep_news_trf
+            en: en_core_web_trf
+            fr: fr_dep_news_trf
+      request_parameters:
+        model_variant:
+          type: string
+          default: efficiency
+          values: [efficiency, accuracy]
+        model_name:
+          type: string
+          default: null
+        write_types:
+          type: list_string_or_json_string
+          default: all_textimager_output_types
+        use_existing_tokens:
+          type: boolean
+          default: false
+        use_existing_sentences:
+          type: boolean
+          default: false
+        spacy_batch_size:
+          type: integer
+          default: 32
+        strict_language_check:
+          type: boolean
+          default: false
+        spacy_disable:
+          type: list_string
+          default: []
+        prefer_gpu:
+          type: boolean
+          default: false
+      procedure_knobs:
+        pretokenized_doc:
+          enabled_when: tokens_and_spaces_are_present_and_same_length
+        existing_sentence_starts:
+          enabled_when: sent_starts_present
+        model_cache:
+          shared_with_async_msgpack_loader: true
+
+  taxonerd:
+    async_msgpack:
+      source_files:
+        - duui-py/examples/taxonerd-async/taxonerd_annotator.py
+        - duui-py/examples/taxonerd-async/_taxonerd_shared.py
+      codec: msgpack_lua
+      source_policy:
+        required_source: github.com/abrami/taxonerd
+        source_root_env: DUUI_TAXONERD_SOURCE_ROOT
+        source_root_default: /storage/projects/BIOfid/code/dterefe/taxonerd-abrami
+      request_parameters:
+        model:
+          type: string
+          default: en_ner_eco_md
+          aliases: [model_name]
+          alias_mapping:
+            biobert: en_ner_eco_biobert
+            biobert_weak: en_ner_eco_biobert_weak
+            md: en_ner_eco_md
+            md_weak: en_ner_eco_md_weak
+        linking:
+          type: string
+          default: gbif_backbone
+          aliases: [linker_name]
+          alias_mapping:
+            gbif: gbif_backbone
+            gbif_backbone: gbif_backbone
+            taxref: taxref
+            ncbi: ncbi_taxonomy
+            ncbi_taxonomy: ncbi_taxonomy
+            ncbi_lite: ncbi_taxonomy_lite
+            ncbi_taxonomy_lite: ncbi_taxonomy_lite
+            none: null
+            "": null
+        prefer_gpu:
+          type: boolean
+          default: false
+          env_fallbacks:
+            - DUUI_PREFER_GPU
+            - CUDA_VISIBLE_DEVICES
+        threshold:
+          type: number
+          default: 0.7
+        exclude:
+          type: string_or_list
+          default:
+            - tagger
+            - parser
+            - taxo_abbrev_detector
+            - taxon_linker
+            - pysbd_sentencizer
+        allow_unlinked:
+          type: boolean
+          default: false
+          effect: permit_linking_none_without_error
+      procedure_knobs:
+        strategy:
+          current: legacy_find_in_text_procedure
+        model_cache:
+          lru_cache_maxsize: 4
+          key_fields: [model, linker, threshold_rounded_6, exclude_sorted, prefer_gpu]
+        runtime_preload:
+          model:
+            env: DUUI_TAXONERD_PRELOAD_MODEL
+            default: en_ner_eco_md
+          linker:
+            env: DUUI_TAXONERD_PRELOAD_LINKER
+            default: gbif_backbone
+          threshold:
+            env: DUUI_TAXONERD_PRELOAD_THRESHOLD
+            default: 0.7
+          exclude:
+            env: DUUI_TAXONERD_PRELOAD_EXCLUDE
+            default:
+              - tagger
+              - parser
+              - taxo_abbrev_detector
+              - taxon_linker
+              - pysbd_sentencizer
+        output_types:
+          taxon: org.texttechnologylab.annotation.type.Taxon
+          annotation_comment: org.texttechnologylab.annotation.AnnotationComment
+    legacy_lua_json:
+      source_file: duui-py/examples/taxonerd-async/taxonerd_legacy_annotator.py
+      codec: lua_custom_json
+      request_parameters:
+        model:
+          type: string
+          default: en_ner_eco_md
+        linking:
+          type: string
+          default: gbif_backbone
+        threshold:
+          type: number
+          default: 0.7
+        exclude:
+          type: list_string
+          default:
+            - tagger
+            - parser
+            - taxo_abbrev_detector
+            - taxon_linker
+            - pysbd_sentencizer
+        prefer_gpu:
+          type: boolean
+          default: false
+      procedure_knobs:
+        runtime_preload:
+          model:
+            env: DUUI_TAXONERD_PRELOAD_MODEL
+            default: en_ner_eco_md
+          linker:
+            env: DUUI_TAXONERD_PRELOAD_LINKER
+            default: gbif_backbone
+          threshold:
+            env: DUUI_TAXONERD_PRELOAD_THRESHOLD
+            default: 0.7
+        response_comment_keys:
+          - linking
+          - value
+          - propability

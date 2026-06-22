@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+import inspect
 from pathlib import Path
 import sys
 
@@ -19,11 +20,13 @@ from duui_py.logging import (
     create_event_context_from_request,
     set_event_context,
     EventSink,
+    ConsoleSink,
     StreamSink,
+    logger,
 )
 from duui_py.models import AnnotatorConfig
 from duui_py.settings import set_settings_once
-from duui_py.telemetry import create_stream_identifiers_from_request, telemetry
+from duui_py.telemetry import create_stream_identifiers_from_request
 
 RequestT = TypeVar("RequestT")
 ResponseT = TypeVar("ResponseT")
@@ -46,6 +49,13 @@ def _validate_lua_communication_layer(codec: Codec[Any, Any]) -> None:
 
 
 def _load_typesystem_xml(path: str, annotator_cls: type[Any]) -> bytes:
+    resolved = _resolve_typesystem_path(path, annotator_cls)
+    if resolved is not None:
+        return resolved.read_bytes()
+    return EMPTY_TYPESYSTEM_XML
+
+
+def _resolve_typesystem_path(path: str, annotator_cls: type[Any]) -> Path | None:
     candidates = [Path(path)]
     module = sys.modules.get(annotator_cls.__module__)
     module_file = getattr(module, "__file__", None)
@@ -54,9 +64,8 @@ def _load_typesystem_xml(path: str, annotator_cls: type[Any]) -> bytes:
 
     for candidate in candidates:
         if candidate.exists():
-            return candidate.read_bytes()
-
-    return EMPTY_TYPESYSTEM_XML
+            return candidate.resolve()
+    return None
 
 
 def create_app(
@@ -68,6 +77,10 @@ def create_app(
 ) -> FastAPI:
     annotator = annotator_cls(config_path=config_path, config=config)
     cfg = annotator.config
+    resolved_typesystem_path = _resolve_typesystem_path(cfg.typesystem_xml_path, annotator_cls)
+    if resolved_typesystem_path is not None:
+        cfg = cfg.model_copy(update={"typesystem_xml_path": str(resolved_typesystem_path)})
+        annotator.config = cfg
     set_settings_once(cfg.meta.settings)
 
     settings = cfg.meta.settings
@@ -82,7 +95,15 @@ def create_app(
     app.state.codec = codec
     app.state.annotator = annotator
     typesystem_xml = _load_typesystem_xml(cfg.typesystem_xml_path, annotator_cls)
-    logger = None
+    telemetry_service = None
+
+    async def _invoke_optional_lifecycle(name: str) -> None:
+        hook = getattr(annotator, name, None)
+        if not callable(hook):
+            return
+        result = hook()
+        if inspect.isawaitable(result):
+            await result
 
     @app.get("/v1/typesystem")
     def get_typesystem() -> Response:
@@ -103,6 +124,7 @@ def create_app(
             "version": d.version,
             "input": d.input.model_dump(),
             "output": d.output.model_dump(),
+            "parameters": d.parameters,
         }
 
     @app.get("/v1/documentation")
@@ -114,7 +136,7 @@ def create_app(
             "description": cfg.description,
             "implementation_lang": cfg.meta.implementation_lang,
             "meta": cfg.meta.meta,
-            "parameters": cfg.parameters_schema,
+            "parameters": d.parameters,
         }
 
     @app.post("/v1/process")
@@ -122,18 +144,28 @@ def create_app(
         if not settings.logging.enabled:
             return await adapter.handle(request, annotator, codec, cfg)
 
-        await telemetry.trace("Process request accepted", path=str(request.url.path))
+        logger().trace("Process request accepted", path=str(request.url.path))
         try:
             response = await adapter.handle(request, annotator, codec, cfg)
         except Exception as exc:
-            await telemetry.critical(
+            logger().critical(
                 "Process request failed before response",
                 exception=type(exc).__name__,
                 path=str(request.url.path),
             )
             raise
-        await telemetry.debug("Process response prepared", path=str(request.url.path))
+        logger().debug("Process response prepared", path=str(request.url.path))
         return response
+
+    @app.on_event("startup")
+    async def start_annotator() -> None:
+        if telemetry_service is not None:
+            telemetry_service.start()
+        await _invoke_optional_lifecycle("startup")
+
+    @app.on_event("shutdown")
+    async def stop_annotator() -> None:
+        await _invoke_optional_lifecycle("shutdown")
 
     logging_settings = settings.logging
     if logging_settings.enabled:
@@ -141,9 +173,12 @@ def create_app(
             default_ttl_minutes=logging_settings.stream_timeout_minutes,
             max_queue_size=logging_settings.max_queue_size,
         )
-        sinks: list[EventSink] = [cast(EventSink, StreamSink(stream_manager))]
+        sinks: list[EventSink] = [
+            cast(EventSink, StreamSink(stream_manager)),
+            cast(EventSink, ConsoleSink()),
+        ]
 
-        logger = configure_logger(
+        telemetry_service = configure_logger(
             sinks=sinks,
             default_context={
                 "annotator_name": cfg.descriptor.name,
@@ -164,13 +199,13 @@ def create_app(
 
         @app.on_event("startup")
         async def start_observability() -> None:
-            logger.start()
+            telemetry_service.start()
             metric_collector.start()
 
         @app.on_event("shutdown")
         async def stop_observability() -> None:
             await metric_collector.stop()
-            await logger.stop()
+            await telemetry_service.stop()
             await stream_manager.stop()
 
         @app.get("/v2/events")

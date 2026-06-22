@@ -106,10 +106,32 @@ class FeatureStructure(BaseModel):
         object.__setattr__(self, "features", features)
 
     def __init__(self, **values: Any) -> None:
-        if _fast_constructor_enabled(self.__class__):
-            _init_model_state(self, _fast_model_data(self.__class__, values))
+        if not _fast_constructor_enabled(self.__class__):
+            self.__pydantic_validator__.validate_python(values, self_instance=self)
             return
-        self.__pydantic_validator__.validate_python(values, self_instance=self)
+
+        # -- fast path: same speed as model_construct, features correct ----------
+        _core = _CORE_FIELD_NAMES
+        feature_dict: dict[str, UimaValue] = {}
+        existing = values.get("features")
+        if isinstance(existing, dict):
+            for k, v in existing.items():
+                if v is not None:
+                    feature_dict[str(k)] = _normalize_if_needed(v)
+        for key, val in values.items():
+            if key in _core or val is None:
+                continue
+            feature_dict[key] = _normalize_if_needed(val)
+        values["features"] = feature_dict
+
+        data: dict[str, Any] = {
+            "ref": values.pop("ref", None),
+            "type": values.pop("type", None) or _type_name(self.__class__),
+            "begin": values.pop("begin", None),
+            "end": values.pop("end", None),
+            **values,
+        }
+        _init_model_state(self, data)
 
     @classmethod
     @model_validator(mode="before")

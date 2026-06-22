@@ -1,16 +1,18 @@
 # TaxoNERD
 
-DUUI V1 text example using Python-native config, generated `MsgPackLuaCodec`, and `AsyncChunkedRequestAdapter`.
+DUUI V1 text example with two comparable implementations:
 
-The `input_strategy=legacy-procedure` variant intentionally uses the same TaxoNERD
-procedure as the legacy service: load TaxoNERD with the configured linker and call
-`find_in_text(text)`. It exists to compare legacy JSON/Lua transport against the
-generated MsgPack/async transport without changing the TaxoNERD algorithm.
+- `taxonerd_legacy_annotator.py` uses the old custom Lua JSON codec.
+- `taxonerd_annotator.py` uses generated MsgPack Lua.
+
+Both versions load TaxoNERD from the GitHub Abrami fork and call the same
+`find_in_text(text)` procedure. That keeps evaluation focused on DUUI transport
+and procedural overhead instead of changing model or linker semantics.
 
 ## Files
 
-- `taxonerd_annotator.py` - whole-document baseline annotator implementation and config
-- `taxonerd_span_window_annotator.py` - experimental span/window annotator that consumes UIMA sentence/paragraph/div/section/title spans, batches bounded windows, and remaps TaxoNERD offsets to the original document
+- `taxonerd_legacy_annotator.py` - old Lua JSON baseline
+- `taxonerd_annotator.py` - generated MsgPack Lua implementation
 - `TypeSystem*.xml` - UIMA type system
 - `requirements.txt` - runtime dependencies
 - `Dockerfile` - container image build
@@ -28,6 +30,5 @@ The annotator yields existing UIMA model objects:
 
 ```text
 org.texttechnologylab.annotation.type.Taxon
-org.texttechnologylab.annotation.AnnotatorMetaData
-org.texttechnologylab.annotation.DocumentModification
+org.texttechnologylab.annotation.AnnotationComment
 ```

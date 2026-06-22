@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
-from duui_py.logging.core import get_event_logger, MetricEvent
+from duui_py.logging.core import logger, MetricEvent
 
 try:
     import psutil
@@ -84,31 +84,31 @@ class MetricCollector:
         interval_ms = int((current_time - self._last_collection_time) * 1000)
         self._last_collection_time = current_time
         
-        logger = get_event_logger()
+        log = logger()
         
         # Collect process metrics
         if self.include_process_metrics:
             process_metrics = self._collect_process_metrics(interval_ms)
             for metric in process_metrics:
-                await logger.metric(**metric)
+                log.metric(**metric)
         
         # Collect system metrics
         if self.include_system_metrics:
             system_metrics = self._collect_system_metrics(interval_ms)
             for metric in system_metrics:
-                await logger.metric(**metric)
+                log.metric(**metric)
         
         # Collect disk metrics
         if self.include_disk_metrics:
             disk_metrics = self._collect_disk_metrics(interval_ms)
             for metric in disk_metrics:
-                await logger.metric(**metric)
+                log.metric(**metric)
         
         # Collect network metrics
         if self.include_network_metrics:
             network_metrics = self._collect_network_metrics(interval_ms)
             for metric in network_metrics:
-                await logger.metric(**metric)
+                log.metric(**metric)
     
     def _collect_process_metrics(self, interval_ms: int) -> List[Dict[str, Any]]:
         """Collect metrics for the current process."""

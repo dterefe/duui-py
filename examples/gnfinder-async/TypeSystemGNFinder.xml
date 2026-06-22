@@ -6,6 +6,20 @@
     <vendor/>
     <types>
         <typeDescription>
+            <name>de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity</name>
+            <supertypeName>uima.tcas.Annotation</supertypeName>
+            <features>
+                <featureDescription>
+                    <name>value</name>
+                    <rangeTypeName>uima.cas.String</rangeTypeName>
+                </featureDescription>
+                <featureDescription>
+                    <name>identifier</name>
+                    <rangeTypeName>uima.cas.String</rangeTypeName>
+                </featureDescription>
+            </features>
+        </typeDescription>
+        <typeDescription>
             <name>org.texttechnologylab.annotation.biofid.Taxon</name>
             <description>Base-Type for recognized taxonomic entities.</description>
             <supertypeName>de.tudarmstadt.ukp.dkpro.core.api.ner.type.NamedEntity</supertypeName>
@@ -310,9 +324,26 @@
             </allowedValues>
         </typeDescription>
         <typeDescription>
-            <name>org.texttechnologylab.annotation.biofid.gazetteer.Taxon</name>
+            <name>org.texttechnologylab.annotation.DocumentModification</name>
             <description/>
-            <supertypeName>org.texttechnologylab.annotation.biofid.Taxon</supertypeName>
+            <supertypeName>uima.cas.AnnotationBase</supertypeName>
+            <features>
+                <featureDescription>
+                    <name>user</name>
+                    <description/>
+                    <rangeTypeName>uima.cas.String</rangeTypeName>
+                </featureDescription>
+                <featureDescription>
+                    <name>timestamp</name>
+                    <description/>
+                    <rangeTypeName>uima.cas.Long</rangeTypeName>
+                </featureDescription>
+                <featureDescription>
+                    <name>comment</name>
+                    <description/>
+                    <rangeTypeName>uima.cas.String</rangeTypeName>
+                </featureDescription>
+            </features>
         </typeDescription>
     </types>
 </typeSystemDescription>

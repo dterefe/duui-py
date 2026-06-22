@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import sys
 from typing import Any, get_args, get_origin
 import xml.etree.ElementTree as ET
 
@@ -53,7 +54,7 @@ class WirePlan:
         compression = config.wire.compression
         if resolved_protocol in {"compressed-msgpack-columnar", "runtime-msgpack-compressed"} and compression == "none":
             compression = "zlib"
-        if compression not in {"none", "zlib"}:
+        if compression not in {"none", "zlib", "zstd"}:
             raise NotImplementedError(
                 f"compression={compression} requires an external Java/Lua helper; zlib is the generic built-in option"
             )
@@ -229,14 +230,15 @@ def _feature_ranges(type_name: str, features: list[str], xml_ranges: dict[str, d
 
 
 def _type_system_ranges(path_value: str) -> dict[str, dict[str, str]]:
-    path = Path(path_value)
+    path = _resolve_type_system_path(path_value)
     if not path.is_file():
         return {}
     try:
         root = ET.parse(path).getroot()
     except Exception:
         return {}
-    out: dict[str, dict[str, str]] = {}
+    declared: dict[str, dict[str, str]] = {}
+    parents: dict[str, str] = {}
     ns = ""
     if root.tag.startswith("{"):
         ns = root.tag.split("}", 1)[0] + "}"
@@ -244,14 +246,50 @@ def _type_system_ranges(path_value: str) -> dict[str, dict[str, str]]:
         name = type_desc.findtext(f"{ns}name")
         if not name:
             continue
+        supertype_name = type_desc.findtext(f"{ns}supertypeName")
+        if supertype_name:
+            parents[name] = supertype_name
         ranges: dict[str, str] = {}
         for feature_desc in type_desc.findall(f"./{ns}features/{ns}featureDescription"):
             feature_name = feature_desc.findtext(f"{ns}name")
             range_name = feature_desc.findtext(f"{ns}rangeTypeName")
             if feature_name and range_name:
                 ranges[feature_name] = _range_from_uima_name(range_name)
-        out[name] = ranges
-    return out
+        declared[name] = ranges
+
+    resolved: dict[str, dict[str, str]] = {}
+
+    def resolve(type_name: str, stack: set[str]) -> dict[str, str]:
+        if type_name in resolved:
+            return resolved[type_name]
+        if type_name in stack:
+            return dict(declared.get(type_name, {}))
+        stack.add(type_name)
+        ranges: dict[str, str] = {}
+        parent = parents.get(type_name)
+        if parent:
+            ranges.update(resolve(parent, stack))
+        ranges.update(declared.get(type_name, {}))
+        stack.remove(type_name)
+        resolved[type_name] = ranges
+        return ranges
+
+    for type_name in declared:
+        resolve(type_name, set())
+    return resolved
+
+
+def _resolve_type_system_path(path_value: str) -> Path:
+    path = Path(path_value)
+    if path.is_absolute() or path.is_file():
+        return path
+    for entry in sys.path:
+        if not entry:
+            continue
+        candidate = Path(entry) / path
+        if candidate.is_file():
+            return candidate
+    return path
 
 
 def _range_from_uima_name(range_name: str) -> str:

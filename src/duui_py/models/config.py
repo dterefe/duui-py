@@ -258,6 +258,7 @@ class AnnotatorDescriptor(BaseModel):
     version: str = Field(min_length=1)
     input: IODescriptor
     output: IODescriptor
+    parameters: Json = Field(default_factory=dict)
 
 
 IODescriptorVNext = IODescriptor
@@ -272,6 +273,25 @@ class AnnotatorConfig(BaseModel):
     typesystem_xml_path: str = "TypeSystem.xml"
     parameters_schema: Json = Field(default_factory=dict)
     wire: WireSettings = Field(default_factory=WireSettings)
+
+    @model_validator(mode="after")
+    def mirror_parameters_to_descriptor(self) -> Self:
+        if self.descriptor.parameters and not self.parameters_schema:
+            object.__setattr__(
+                self,
+                "parameters_schema",
+                self.descriptor.parameters,
+            )
+        elif self.parameters_schema and not self.descriptor.parameters:
+            object.__setattr__(
+                self,
+                "descriptor",
+                self.descriptor.model_copy(
+                    update={"parameters": self.parameters_schema},
+                    deep=True,
+                ),
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_descriptor_patterns(self) -> Self:

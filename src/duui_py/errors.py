@@ -3,7 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import Any
 
-from duui_py.logging.core import get_configured_event_logger
+from duui_py.logging.core import logger
 from duui_py.models import DuuiError
 
 RETRYABLE_STATUSES = {408, 425, 429, 502, 503, 504}
@@ -116,9 +116,6 @@ def timeout(message: str, **detail: Any) -> None:
 
 
 async def log_duui_error(error: DuuiHttpError, *, operation: str | None = None) -> None:
-    logger = get_configured_event_logger()
-    if logger is None:
-        return
     extra = {
         "status": error.status_code,
         "title": error.title,
@@ -129,7 +126,7 @@ async def log_duui_error(error: DuuiHttpError, *, operation: str | None = None) 
         extra["retry_after"] = error.retry_after
     if operation:
         extra["operation"] = operation
-    await logger.error_event(
+    logger().error_event(
         error_type=str(error.status_code),
         message=error.message,
         extra=extra,
@@ -141,7 +138,7 @@ def wrap_exception(
 ) -> DuuiHttpError:
     return DuuiHttpError(
         500,
-        message,
-        detail={"exception_type": type(exc).__name__},
+        f"{message}: {type(exc).__name__}: {exc}",
+        detail={"exception_type": type(exc).__name__, "exception": str(exc)},
         cause=exc,
     )

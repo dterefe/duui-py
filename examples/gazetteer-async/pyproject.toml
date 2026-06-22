@@ -13,4 +13,4 @@ dependencies = [
 ]
 
 [tool.setuptools]
-py-modules = ["gazetteer_annotator"]
+py-modules = ["gazetteer_annotator", "gazetteer_legacy_annotator"]

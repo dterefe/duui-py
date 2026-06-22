@@ -13,10 +13,11 @@ from duui_py.annotator import DuuiAnnotator, V1AsyncProcess, V1Payload, V1Proces
 from duui_py.codecs.base import Codec
 from duui_py.codecs.profiling import begin_wire_profile, end_wire_profile
 from duui_py.errors import DuuiHttpError, log_duui_error, wrap_exception
+from duui_py.logging import logger
 from duui_py.models import AnnotatorConfig, DuuiError, DuuiResult, V1RequestEnvelope
 from duui_py.models.uima import Annotation, FeatureStructure, SoFa, SoFaAnnotationSpans, SoFaBase, sofa_kind
 from duui_py.models.uima_typesystem.texttechnologylab.annotation.types import AnnotatorMetaData, DocumentModification
-from duui_py.telemetry import TelemetryRecorder, telemetry
+from duui_py.telemetry import TelemetryRecorder
 from duui_py.utils.mime import matches_mime_type
 
 RequestT = TypeVar("RequestT")
@@ -282,11 +283,17 @@ def _record_async_phase(recorder: TelemetryRecorder, name: str):
     def decorate(func):
         async def wrapper(*args, **kwargs):
             started = time.perf_counter()
-            await telemetry.trace("Process phase entered", phase=name)
+            logger().lifecycle("STARTED", status=f"V1_PROCESS_{name.upper()}", phase=name)
             try:
                 return await func(*args, **kwargs)
             except Exception as exc:
-                await telemetry.error(
+                logger().lifecycle(
+                    "FAILED",
+                    status=f"V1_PROCESS_{name.upper()}",
+                    phase=name,
+                    failure=exc,
+                )
+                logger().error(
                     "Process phase failed",
                     phase=name,
                     exception=type(exc).__name__,
@@ -295,13 +302,13 @@ def _record_async_phase(recorder: TelemetryRecorder, name: str):
             finally:
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 recorder.mark(name, elapsed_ms)
-                await telemetry.metric(
+                logger().metric(
                     "processing",
                     f"duui.process.{name}_ms",
                     elapsed_ms,
                     "milliseconds",
-                    interval_ms=int(elapsed_ms),
-                    phase=name,
+                    interval_ms=0,
+                    tags={"phase": name},
                 )
 
         return wrapper
@@ -313,12 +320,19 @@ def _record_async_iter_phase(recorder: TelemetryRecorder, name: str):
     def decorate(func):
         async def wrapper(*args, **kwargs):
             started = time.perf_counter()
-            await telemetry.trace("Process stream phase entered", phase=name)
+            logger().lifecycle("STARTED", status=f"V1_PROCESS_{name.upper()}", phase=name, stream=True)
             try:
                 async for value in func(*args, **kwargs):
                     yield value
             except Exception as exc:
-                await telemetry.error(
+                logger().lifecycle(
+                    "FAILED",
+                    status=f"V1_PROCESS_{name.upper()}",
+                    phase=name,
+                    stream=True,
+                    failure=exc,
+                )
+                logger().error(
                     "Process stream phase failed",
                     phase=name,
                     exception=type(exc).__name__,
@@ -327,13 +341,13 @@ def _record_async_iter_phase(recorder: TelemetryRecorder, name: str):
             finally:
                 elapsed_ms = (time.perf_counter() - started) * 1000.0
                 recorder.mark(name, elapsed_ms)
-                await telemetry.metric(
+                logger().metric(
                     "processing",
                     f"duui.process.{name}_ms",
                     elapsed_ms,
                     "milliseconds",
-                    interval_ms=int(elapsed_ms),
-                    phase=name,
+                    interval_ms=0,
+                    tags={"phase": name},
                 )
 
         return wrapper

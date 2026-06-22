@@ -14,7 +14,4 @@ RUN pip install --no-cache-dir -e /app \
 
 WORKDIR /app/examples/gazetteer-async
 
-EXPOSE 9714
-
-ENTRYPOINT ["uvicorn", "gazetteer_annotator:app", "--host", "0.0.0.0", "--port", "9714"]
-CMD ["--workers", "1"]
+ENTRYPOINT ["sh", "-c", "exec uvicorn ${DUUI_PY_APP:-gazetteer_annotator:app} --host ${DUUI_PY_HOST:-0.0.0.0} --port ${DUUI_PY_PORT:-9714} \"$@\"", "--"]

@@ -12,7 +12,4 @@ RUN pip install --no-cache-dir "https://github.com/explosion/spacy-models/releas
 
 WORKDIR /app/examples/spacy-async
 
-EXPOSE 9714
-
-ENTRYPOINT ["uvicorn", "spacy_annotator:app", "--host", "0.0.0.0", "--port", "9714"]
-CMD ["--workers", "1"]
+ENTRYPOINT ["sh", "-c", "exec uvicorn ${DUUI_PY_APP:-spacy_annotator:app} --host ${DUUI_PY_HOST:-0.0.0.0} --port ${DUUI_PY_PORT:-9714} \"$@\"", "--"]

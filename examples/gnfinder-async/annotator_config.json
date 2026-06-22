@@ -46,7 +46,8 @@
     "output": {
       "types": {
         "Taxon": [
-          "org.texttechnologylab.annotation.biofid.gnfinder.Taxon"
+          "org.texttechnologylab.annotation.biofid.gnfinder.Taxon",
+          "org.texttechnologylab.annotation.biofid.gnfinder.VerifiedTaxon"
         ]
       },
       "text": {
@@ -58,19 +59,74 @@
           ]
         }
       }
+    },
+    "parameters": {
+      "lang": {
+        "type": "string",
+        "default": "detect",
+        "description": "Language hint for name detection."
+      },
+      "verify": {
+        "type": "boolean",
+        "default": true,
+        "description": "Keep parity with GNFinder verify parameter."
+      },
+      "gnfinder_binary": {
+        "type": "string",
+        "default": "gnfinder",
+        "description": "Path to GNFinder executable."
+      },
+      "gnfinder_backend_port": {
+        "type": "integer",
+        "default": 18999
+      },
+      "gnfinder_startup_timeout": {
+        "type": "number",
+        "default": 20.0
+      },
+      "timeout_seconds": {
+        "type": "number",
+        "default": 120,
+        "description": "Process timeout per invocation."
+      },
+      "sources": {
+        "type": "array",
+        "items": {
+          "type": "integer"
+        }
+      },
+      "all_matches": {
+        "type": "boolean"
+      },
+      "unique_names": {
+        "type": "boolean"
+      },
+      "ambiguous_uninomials": {
+        "type": "boolean"
+      },
+      "no_bayes": {
+        "type": "boolean"
+      },
+      "odds_details": {
+        "type": "boolean"
+      },
+      "return_content": {
+        "type": "boolean"
+      },
+      "words_around": {
+        "type": "integer"
+      },
+      "language": {
+        "type": "string",
+        "default": "detect",
+        "description": "Alias for lang."
+      },
+      "verification": {
+        "type": "boolean",
+        "default": true,
+        "description": "Alias for verify."
+      }
     }
   },
-  "typesystem_xml_path": "TypeSystemGNFinder.xml",
-  "parameters_schema": {
-    "lang": {
-      "type": "string",
-      "default": "detect",
-      "description": "Language hint for name detection."
-    },
-    "verify": {
-      "type": "boolean",
-      "default": true,
-      "description": "Keep parity with GNFinder verify parameter."
-    }
-  }
+  "typesystem_xml_path": "TypeSystemGNFinder.xml"
 }

@@ -31,19 +31,19 @@
   "descriptor": {
     "name": "spacy-lua-msgpack",
     "version": "1.0.0",
-      "input": {
-        "types": {
-          "Sentence": [
-            "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence"
-          ],
-          "Token": [
-            "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token"
-          ]
-        },
-        "text": {
-          "default": {
-            "types": {},
-            "mimeType": "text/plain; charset=utf-8",
+    "input": {
+      "types": {
+        "Sentence": [
+          "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Sentence"
+        ],
+        "Token": [
+          "de.tudarmstadt.ukp.dkpro.core.api.segmentation.type.Token"
+        ]
+      },
+      "text": {
+        "default": {
+          "types": {},
+          "mimeType": "text/plain; charset=utf-8",
           "languages": [
             "x-unspecified"
           ]
@@ -89,37 +89,95 @@
           ]
         }
       }
+    },
+    "parameters": {
+      "model_name": {
+        "type": "string",
+        "description": "Name of the spaCy model to use",
+        "default": "en_core_web_trf",
+        "enum": [
+          "en_core_web_sm",
+          "de_core_news_sm",
+          "en_core_web_trf",
+          "de_dep_news_trf",
+          "fr_core_news_sm",
+          "xx_ent_wiki_sm"
+        ]
+      },
+      "model_variant": {
+        "type": "string",
+        "description": "Old TextImager model variant. accuracy maps German to de_dep_news_trf and English to en_core_web_trf.",
+        "default": "trf",
+        "enum": [
+          "trf",
+          "sm"
+        ]
+      },
+      "spacy_language": {
+        "type": "string",
+        "description": "Language hint when model_name is not set.",
+        "default": "en"
+      },
+      "exclude": {
+        "type": "array",
+        "description": "spaCy pipeline components or output groups to skip."
+      },
+      "use_existing_tokens": {
+        "type": "boolean",
+        "description": "Use existing tokens from CAS",
+        "default": false
+      },
+      "use_existing_sentences": {
+        "type": "boolean",
+        "description": "Use existing sentences from CAS",
+        "default": false
+      },
+      "spacy_batch_size": {
+        "type": "integer",
+        "description": "Batch size for sentence-window nlp.pipe processing",
+        "default": 32
+      },
+      "spacy_n_process": {
+        "type": "integer",
+        "description": "Number of worker processes for nlp.pipe. 0 = auto.",
+        "default": 0
+      },
+      "prefer_gpu": {
+        "type": "boolean",
+        "description": "Prefer GPU when available for spaCy inference.",
+        "default": false
+      },
+      "disable_pipeline_components": {
+        "type": "boolean",
+        "description": "Automatically disable unused pipeline components.",
+        "default": true
+      },
+      "adaptive_batch_size": {
+        "type": "boolean",
+        "description": "Adapt batch size based on document length.",
+        "default": true
+      },
+      "spacy_model": {
+        "type": "string",
+        "description": "Alias for model_name."
+      },
+      "single_model": {
+        "type": "string",
+        "description": "Alias for model_name."
+      },
+      "spacy_model_size": {
+        "type": "string",
+        "description": "Alias for model_variant."
+      },
+      "language": {
+        "type": "string",
+        "description": "Alias for spacy_language."
+      },
+      "lang": {
+        "type": "string",
+        "description": "Alias for spacy_language."
+      }
     }
   },
-  "typesystem_xml_path": "TypeSystemSpacy.xml",
-  "parameters_schema": {
-    "model_name": {
-      "type": "string",
-      "description": "Name of the spaCy model to use",
-      "default": "en_core_web_sm",
-      "enum": [
-        "en_core_web_sm",
-        "de_core_news_sm",
-        "en_core_web_trf",
-        "de_dep_news_trf",
-        "fr_core_news_sm",
-        "xx_ent_wiki_sm"
-      ]
-    },
-    "use_existing_tokens": {
-      "type": "boolean",
-      "description": "Use existing tokens from CAS",
-      "default": false
-    },
-    "use_existing_sentences": {
-      "type": "boolean",
-      "description": "Use existing sentences from CAS",
-      "default": false
-    },
-    "spacy_batch_size": {
-      "type": "integer",
-      "description": "Batch size for sentence-window nlp.pipe processing",
-      "default": 32
-    }
-  }
+  "typesystem_xml_path": "TypeSystemSpacy.xml"
 }

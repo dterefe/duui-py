@@ -1,10 +1,14 @@
 # GNFinder
 
-DUUI V1 text example using Python-native config, generated `MsgPackLuaCodec`, and `AsyncChunkedRequestAdapter`.
+DUUI V1 text example with two comparable implementations:
+
+- `gnfinder_legacy_annotator.py` uses the old custom Lua JSON codec.
+- `gnfinder_annotator.py` uses generated MsgPack Lua.
 
 ## Files
 
-- `gnfinder_annotator.py` - annotator implementation and config
+- `gnfinder_legacy_annotator.py` - old Lua JSON baseline
+- `gnfinder_annotator.py` - generated MsgPack Lua implementation
 - `TypeSystemGNFinder.xml` - UIMA type system
 - `requirements.txt` - runtime dependencies
 - `Dockerfile` - container image build
